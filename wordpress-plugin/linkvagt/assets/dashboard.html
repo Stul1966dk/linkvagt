@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>LinkVagt</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">LV</span><span>LinkVagt</span></div>
+      <nav aria-label="Primær navigation">
+        <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span>Overblik</button>
+        <button class="nav-item" data-view="sites"><span class="nav-icon">◎</span>Hjemmesider</button>
+        <button class="nav-item" data-view="scans"><span class="nav-icon">↻</span>Scanninger</button>
+        <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Indstillinger</button>
+        <button class="nav-item" data-view="support"><span class="nav-icon">?</span>Support</button>
+      </nav>
+      <div class="sidebar-foot"><span class="status-dot"></span>Scanner aktiv</div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <button class="mobile-menu" type="button" aria-label="Vis menu">☰</button>
+        <div><p class="eyebrow">LINKOVERVÅGNING</p><h1 id="page-title">Overblik</h1></div>
+        <div class="topbar-actions">
+          <button class="button primary" id="add-site-button"><span aria-hidden="true">＋</span> Tilføj hjemmeside</button>
+          <div class="account">
+            <span id="account-email"></span>
+            <button class="button secondary" id="logout-button" type="button">Log ud</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="global-progress">
+        <section class="scan-progress" id="scan-progress" aria-live="polite" hidden>
+          <div class="scan-progress-copy">
+            <div><span class="scan-pulse" aria-hidden="true"></span><strong id="scan-progress-title">Scanning i gang</strong></div>
+            <strong class="scan-percent" id="scan-progress-percent">0%</strong>
+          </div>
+          <div class="progress-track" role="progressbar" aria-label="Scanningsfremdrift" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span id="scan-progress-bar"></span>
+          </div>
+          <div class="scan-progress-details">
+            <span id="scan-progress-pages">0 af 0 sider</span>
+            <span id="scan-progress-links">0 af 0 links</span>
+            <span id="scan-progress-activity">Opdateret lige nu</span>
+          </div>
+        </section>
+      </div>
+
+      <section class="view active" id="view-overview">
+        <div class="metric-grid" id="metrics"></div>
+        <div class="section-heading"><div><h2>Hjemmesider</h2><p>Seneste kontrol på tværs af alle websites</p></div><button class="text-button" data-go="sites">Se alle</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Hjemmeside</th><th>Status</th><th>Problemer</th><th>Seneste scanning</th><th></th></tr></thead><tbody id="overview-sites"></tbody></table></div>
+        <div class="section-heading lower"><div><h2>Seneste aktivitet</h2><p>Manuelt startede scanninger</p></div></div>
+        <div class="activity-list" id="recent-activity"></div>
+      </section>
+
+      <section class="view" id="view-sites">
+        <div class="toolbar"><label class="search"><span aria-hidden="true">⌕</span><input id="site-search" type="search" placeholder="Søg efter hjemmeside"></label><select id="site-status" aria-label="Filtrer status"><option value="all">Alle hjemmesider</option><option value="problems">Med problemer</option></select></div>
+        <div class="table-wrap"><table><thead><tr><th>Hjemmeside</th><th>Kontrolleret</th><th>Døde</th><th>Redirects</th><th>Advarsler</th><th></th></tr></thead><tbody id="sites-table"></tbody></table></div>
+      </section>
+
+      <section class="view" id="view-scans">
+        <div class="toolbar"><select id="scan-site-filter" aria-label="Vælg hjemmeside"><option value="">Alle hjemmesider</option></select><select id="scan-status-filter" aria-label="Vælg status"><option value="all">Alle statusser</option><option value="completed">Gennemført</option><option value="running">I gang</option><option value="queued">I kø</option><option value="failed">Fejlet</option></select></div>
+        <div class="table-wrap"><table><thead><tr><th>Hjemmeside</th><th>Start</th><th>Type</th><th>Status</th><th>Links</th><th>Resultat</th><th></th></tr></thead><tbody id="scans-table"></tbody></table></div>
+      </section>
+
+      <section class="view" id="view-results">
+        <button class="back-button" id="results-back">← Tilbage</button>
+        <div class="result-header"><div><p class="eyebrow" id="result-site-name"></p><h2 id="result-heading">Scanningsresultat</h2><p id="result-meta"></p></div><a class="button secondary" id="csv-link" href="#">↓ Eksportér CSV</a></div>
+        <div class="result-tabs" role="tablist">
+          <button class="active" data-category="all">Alle <span id="count-all">0</span></button>
+          <button data-category="broken">Døde <span id="count-broken">0</span></button>
+          <button data-category="redirect">Redirects <span id="count-redirect">0</span></button>
+          <button data-category="warning">Advarsler <span id="count-warning">0</span></button>
+          <button data-category="ok">Fungerer <span id="count-ok">0</span></button>
+        </div>
+        <div class="toolbar results-toolbar"><label class="search"><span>⌕</span><input id="finding-search" type="search" placeholder="Søg i links"></label><label class="checkbox"><input id="show-ignored" type="checkbox"> Vis ignorerede</label></div>
+        <section class="status-guide" aria-labelledby="status-guide-heading">
+          <div class="status-guide-heading"><h3 id="status-guide-heading">Hvad betyder statuskoderne?</h3><p>Koden er svaret fra den server, linket peger på.</p></div>
+          <dl class="status-code-list">
+            <div><dt class="code-ok">200</dt><dd>Linket virker</dd></div>
+            <div><dt class="code-redirect">301 / 308</dt><dd>Permanent redirect</dd></div>
+            <div><dt class="code-redirect">302 / 307</dt><dd>Midlertidig redirect</dd></div>
+            <div><dt class="code-warning">401 / 403</dt><dd>Login eller adgang nægtet</dd></div>
+            <div><dt class="code-broken">404 / 410</dt><dd>Siden findes ikke</dd></div>
+            <div><dt class="code-warning">408 / 429</dt><dd>Timeout eller for mange kald</dd></div>
+            <div><dt class="code-broken">500–599</dt><dd>Fejl på serveren</dd></div>
+            <div><dt class="code-warning">Netværk</dt><dd>Serveren kunne ikke nås</dd></div>
+          </dl>
+        </section>
+        <div class="table-wrap"><table><thead><tr><th data-sort-column="category"><button class="sort-button active" data-finding-sort="category">Status <span aria-hidden="true">↑</span></button></th><th data-sort-column="destination"><button class="sort-button" data-finding-sort="destination">Destination <span aria-hidden="true">↕</span></button></th><th data-sort-column="source"><button class="sort-button" data-finding-sort="source">Fundet på <span aria-hidden="true">↕</span></button></th><th data-sort-column="firstSeen"><button class="sort-button" data-finding-sort="firstSeen">Først set <span aria-hidden="true">↕</span></button></th><th></th></tr></thead><tbody id="findings-table"></tbody></table></div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="settings-stack">
+          <div class="settings-layout">
+            <div class="settings-copy"><h2>Automatisk scanning</h2><p>På det valgte tidspunkt sættes kun forfaldne websites i kø efter frekvensen på hvert website. Der sendes én samlet mail, når køen er færdig.</p></div>
+            <form class="settings-form" id="schedule-form">
+              <div class="form-grid">
+                <label>Ugedag
+                  <select name="day">
+                    <option value="monday">Mandag</option>
+                    <option value="tuesday">Tirsdag</option>
+                    <option value="wednesday">Onsdag</option>
+                    <option value="thursday">Torsdag</option>
+                    <option value="friday">Fredag</option>
+                    <option value="saturday">Lørdag</option>
+                    <option value="sunday">Søndag</option>
+                  </select>
+                </label>
+                <label>Klokkeslæt<input name="time" type="time" required></label>
+              </div>
+              <dl class="backup-details">
+                <div><dt>Interval</dt><dd>Ugentligt</dd></div>
+                <div><dt>Næste kørsel</dt><dd id="schedule-next">Henter…</dd></div>
+                <div><dt>Status</dt><dd id="schedule-status">Aktiv</dd></div>
+              </dl>
+              <p class="dialog-note">Kun ét website scannes ad gangen. Manuelle scanninger er fortsat mulige og rapporteres separat.</p>
+              <label>Dedikeret LinkVagt-cronadresse
+                <input id="worker-url" type="text" readonly autocomplete="off">
+                <small>Opret denne adresse som et ekstra cronjob hvert minut hos Simply. Adressen indeholder en sikkerhedskode og bør ikke deles.</small>
+              </label>
+              <div class="form-actions"><button type="button" class="button secondary" id="copy-worker-url">Kopiér cronadresse</button><button class="button primary">Gem tidspunkt</button></div>
+            </form>
+          </div>
+          <div class="settings-layout">
+            <div class="settings-copy"><h2>Backup</h2><p>LinkVagt tager automatisk backup ved dagens første opstart, efter en fuld scanning og før en WordPress-rettelse.</p></div>
+            <div class="settings-form backup-panel">
+              <div class="backup-summary" id="backup-summary" aria-live="polite">
+                <span class="backup-state waiting">Henter backupstatus</span>
+              </div>
+              <dl class="backup-details">
+                <div><dt>Seneste backup</dt><dd id="backup-latest">–</dd></div>
+                <div><dt>Kontrol</dt><dd id="backup-integrity">–</dd></div>
+                <div><dt>Antal</dt><dd id="backup-count">–</dd></div>
+                <div><dt>Pladsforbrug</dt><dd id="backup-size">–</dd></div>
+                <div class="backup-location"><dt>Placering</dt><dd id="backup-location">–</dd></div>
+              </dl>
+              <p class="backup-error" id="backup-error" hidden></p>
+              <div class="form-actions"><button type="button" class="button secondary" id="restore-backup">Gendan seneste</button><button type="button" class="button secondary" id="verify-backup">Kontrollér seneste</button><button type="button" class="button primary" id="create-backup">Tag backup nu</button></div>
+            </div>
+          </div>
+          <div class="settings-layout">
+            <div class="settings-copy"><h2>Ekskluderede domæner</h2><p>Links til disse domæner springes over på alle hjemmesider.</p></div>
+            <form class="settings-form" id="exclusions-form">
+              <label>Domæner<textarea name="excluded_domains" rows="6" placeholder="partner-ads.dk&#10;tracking.example.com"></textarea><small>Ét domæne pr. linje. Underdomæner og alle URL'er på domænet springes også over.</small></label>
+              <div class="form-actions"><button class="button primary">Gem ekskluderinger</button></div>
+            </form>
+          </div>
+          <div class="settings-layout">
+            <div class="settings-copy"><h2>Mailrapporter</h2><p>Send en rapport efter scanninger via WordPress og sitets eksisterende SMTP-opsætning.</p></div>
+            <form class="settings-form" id="mail-form">
+              <label class="toggle-row"><span><strong>Aktivér mailrapporter</strong><small>Send rapport efter afsluttede scanninger</small></span><input type="checkbox" name="mail_enabled" role="switch"></label>
+              <label class="toggle-row"><span><strong>Send også rene rapporter</strong><small>Modtag mail, selv når der ikke findes problemer</small></span><input type="checkbox" name="mail_include_clean" role="switch"></label>
+              <div class="form-grid"><label>Standardmodtager<input type="email" name="mail_to" placeholder="dig@firma.dk"></label><label>Afsenderadresse<input type="email" name="mail_from" placeholder="linkvagt@firma.dk"><small>Valgfri. Lad WordPress/SMTP-pluginet vælge afsenderen, hvis feltet er tomt.</small></label></div>
+              <div class="form-actions"><button type="button" class="button secondary" id="test-mail">Send testmail</button><button class="button primary">Gem indstillinger</button></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-support">
+        <div class="support-layout">
+          <nav class="support-nav" aria-label="Supportemner">
+            <button class="active" data-support-target="support-start">Kom godt i gang</button>
+            <button data-support-target="support-scanning">Scanning</button>
+            <button data-support-target="support-results">Resultater</button>
+            <button data-support-target="support-wordpress">WordPress</button>
+            <button data-support-target="support-diagnostics">Diagnostik</button>
+            <button data-support-target="support-backup">Backup og gendannelse</button>
+            <button data-support-target="support-data">Data og sikkerhed</button>
+          </nav>
+          <div class="support-content">
+            <section id="support-start">
+              <p class="eyebrow">GRUNDLÆGGENDE</p>
+              <h2>Kom godt i gang</h2>
+              <p>Tilføj et website under Hjemmesider. LinkVagt forsøger først at bruge de angivne sitemaps og kan ellers følge interne links på websitet. Start derefter kontrollen med cirkelpilen ud for websitet.</p>
+              <ol><li>Tilføj webadressen og eventuelle sitemap-adresser.</li><li>Start en manuel scanning af hele websitet, en enkeltside eller et enkelt link.</li><li>Åbn resultatet og gennemgå døde links, redirects og advarsler.</li></ol>
+            </section>
+            <section id="support-scanning">
+              <p class="eyebrow">KONTROL</p>
+              <h2>Scanning</h2>
+              <p><strong>Hele websitet</strong> opdaterer det komplette resultat. <strong>Enkeltside</strong> kontrollerer alle links på én side. <strong>Enkelt link</strong> er den hurtigste kontrol efter en rettelse.</p>
+              <p>Links på globalt ekskluderede domæner springes over. En fejl kontrolleres igen, før den gemmes, for at reducere midlertidige netværksfejl.</p>
+              <p>Tidspunktet for den automatiske ugekontrol vælges under Indstillinger. LinkVagt scanner ét website ad gangen. Når hele køen er færdig, sendes én samlet rapportmail.</p>
+            </section>
+            <section id="support-results">
+              <p class="eyebrow">STATUS</p>
+              <h2>Resultater</h2>
+              <p><strong>Døde links</strong> er typisk 404, 410 eller serverfejl. <strong>Redirects</strong> virker, men bør ofte opdateres til slutadressen. <strong>Advarsler</strong> kan være adgangsblokering, timeout eller for mange forespørgsler.</p>
+              <p>Brug Ignorer til kendte falske positiver. Ignoreringen gælder også ved senere scanninger og kan aktiveres igen fra resultatlisten.</p>
+            </section>
+            <section id="support-wordpress">
+              <p class="eyebrow">SIKKER RETTELSE</p>
+              <h2>WordPress</h2>
+              <p>Forbind en særskilt WordPress-bruger med et applikationskodeord. LinkVagt viser altid en forhåndskontrol og ændrer først indholdet efter din godkendelse.</p>
+              <p>Før hver rettelse tages en verificeret sikkerhedsbackup. LinkVagt gemmer også det oprindelige WordPress-indhold og kan fortryde ændringen, hvis siden ikke er redigeret siden.</p>
+              <p>Automatisk rettelse understøtter almindeligt indhold i indlæg og sider. Forsiden, menuer, Elementor, Divi, ACF, widgets og formaterede links kræver fortsat manuel behandling.</p>
+            </section>
+            <section id="support-diagnostics">
+              <p class="eyebrow">FEJLFINDING</p>
+              <div class="diagnostic-heading">
+                <div><h2>Diagnostik</h2><p>Seneste fejl og advarsler fra scanningerne med en forklaring på årsagen.</p></div>
+                <button type="button" class="button secondary" id="refresh-diagnostics">Opdater</button>
+              </div>
+              <div class="diagnostic-summary" id="diagnostic-summary">
+                <div><strong id="diagnostic-errors">0</strong><span>Fejl</span></div>
+                <div><strong id="diagnostic-warnings">0</strong><span>Advarsler</span></div>
+              </div>
+              <div class="diagnostic-filters">
+                <label>Hjemmeside<select id="diagnostic-site"><option value="">Alle hjemmesider</option></select></label>
+                <label>Vis<select id="diagnostic-severity"><option value="all">Alt</option><option value="error">Kun fejl</option><option value="warning">Kun advarsler</option></select></label>
+              </div>
+              <div class="diagnostic-list" id="diagnostic-list"></div>
+            </section>
+            <section id="support-backup">
+              <p class="eyebrow">SIKKERHEDSKOPI</p>
+              <h2>Backup og gendannelse</h2>
+              <p>En backup indeholder LinkVagts egne databasetabeller og indstillinger, herunder WordPress-fortrydelsesdata. Kopien krypteres, får checksums og kontrolleres, før den godkendes. Krypteringsnøglen indgår aldrig i backupfilen.</p>
+              <ul><li>Daglig backup ved den første opstart.</li><li>Backup efter en fuld website-scanning.</li><li>Obligatorisk backup før en WordPress-rettelse.</li><li>Manuel backup fra Indstillinger.</li></ul>
+              <p>Den seneste godkendte backup kan gendannes fra Indstillinger ved at skrive <strong>GENDAN</strong>. LinkVagt opretter først en nødbackup og udfører derefter gendannelsen i en databasetransaktion.</p>
+            </section>
+            <section id="support-data">
+              <p class="eyebrow">SERVERDRIFT</p>
+              <h2>Data og sikkerhed</h2>
+              <p>LinkVagt kræver en godkendt ekstern identitet og en aktiv LinkVagt-bruger. Alle ændrende API-kald kræver desuden en gyldig WordPress REST-nonce. WordPress-applikationskodeord gemmes krypteret og vises aldrig igen.</p>
+              <p>Backupmappen placeres som standard uden for WordPress' offentlige webrod. Den beskytter mod fejl og forkerte ændringer, men ikke mod tab af hele serveren. Medtag derfor mappen i hostingens eksterne backup.</p>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="site-dialog">
+    <form method="dialog" id="site-form">
+      <div class="dialog-head"><div><p class="eyebrow">HJEMMESIDE</p><h2 id="site-dialog-title">Tilføj hjemmeside</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
+      <input type="hidden" name="id">
+      <div class="form-grid"><label>Navn<input name="name" required placeholder="Min hjemmeside"></label><label>Webadresse<input name="base_url" required type="url" placeholder="https://example.dk"></label></div>
+      <label>Sitemap URL'er<textarea name="sitemap_urls" rows="3" placeholder="https://example.dk/sitemap.xml&#10;Én adresse pr. linje"></textarea><small>Lad feltet stå tomt, så forsøger LinkVagt at finde et sitemap og ellers crawle websitet.</small></label>
+      <label class="field-narrow">Maks. sider<input type="number" name="max_pages" min="1" max="100000" value="5000"></label>
+      <label class="toggle-row compact"><span><strong>Crawl uden sitemap</strong><small>Følg interne links, hvis sitemap ikke findes</small></span><input type="checkbox" name="crawl_fallback" checked role="switch"></label>
+      <label class="toggle-row compact"><span><strong>Automatisk scanning</strong><small>Slå fra, hvis websitet kun skal scannes manuelt</small></span><input type="checkbox" name="auto_enabled" checked role="switch"></label>
+      <label id="auto-frequency-label">Frekvens
+        <select name="auto_frequency">
+          <option value="weekly">Ugentligt</option>
+          <option value="biweekly">Hver 14. dag</option>
+          <option value="monthly">Månedligt</option>
+        </select>
+      </label>
+      <label id="auto-next-date-label">Næste automatiske scanning
+        <input type="date" name="auto_next_date" required>
+        <small>Vælg forskellige datoer for at fordele belastningen over flere nætter.</small>
+      </label>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close-dialog>Annuller</button><button type="submit" class="button primary" id="save-site">Gem hjemmeside</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="scan-dialog">
+    <form method="dialog" id="scan-form">
+      <div class="dialog-head"><div><p class="eyebrow">MANUEL KONTROL</p><h2>Start scanning</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
+      <input type="hidden" name="site_id">
+      <fieldset class="segmented three"><legend>Omfang</legend><label><input type="radio" name="scope" value="site" checked><span>Hele websitet</span></label><label><input type="radio" name="scope" value="page"><span>Enkeltside</span></label><label><input type="radio" name="scope" value="link"><span>Enkelt link</span></label></fieldset>
+      <label id="target-url-label" hidden><span id="target-url-text">Sidens URL</span><input name="target_url" type="url" placeholder="https://example.dk/en-side"></label>
+      <p class="dialog-note" id="scan-site-note"></p>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close-dialog>Annuller</button><button type="submit" class="button primary">Start scanning</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="ignore-dialog">
+    <form method="dialog" id="ignore-form">
+      <div class="dialog-head"><div><p class="eyebrow">UNDTAGELSE</p><h2>Ignorer link</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
+      <input type="hidden" name="site_id"><input type="hidden" name="destination_url">
+      <p class="dialog-note link-preview" id="ignore-link"></p>
+      <label>Omfang<select name="source_url"><option value="">På hele hjemmesiden</option></select></label>
+      <label>Årsag<textarea name="reason" rows="3" placeholder="Eksempel: Siden blokerer automatiske opslag"></textarea></label>
+      <label>Udløber<input type="date" name="expires_at"><small>Lad feltet stå tomt for permanent ignorering.</small></label>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close-dialog>Annuller</button><button type="submit" class="button danger">Ignorer link</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="wordpress-dialog">
+    <form method="dialog" id="wordpress-form">
+      <div class="dialog-head"><div><p class="eyebrow">WORDPRESS</p><h2 id="wordpress-title">Forbind WordPress</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
+      <input type="hidden" name="site_id">
+      <p class="dialog-note">Brug en særskilt WordPress-bruger med mindst mulige rettigheder og et applikationskodeord. LinkVagt gemmer kodeordet krypteret på hovedsitets server.</p>
+      <div class="form-grid"><label>WordPress-brugernavn<input name="username" required autocomplete="username"></label><label>Applikationskodeord<input name="app_password" type="password" required autocomplete="new-password" placeholder="xxxx xxxx xxxx xxxx"></label></div>
+      <p class="connection-status" id="wordpress-status"></p>
+      <div class="change-history" id="wordpress-history"></div>
+      <div class="dialog-actions"><button type="button" class="button ghost" id="disconnect-wordpress" hidden>Fjern forbindelse</button><button type="button" class="button secondary" id="test-wordpress">Test forbindelse</button><button type="submit" class="button primary">Gem forbindelse</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="repair-dialog">
+    <form method="dialog" id="repair-form">
+      <div class="dialog-head"><div><p class="eyebrow">SIKKER LINKRETTELSE</p><h2>Ret link i WordPress</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
+      <input type="hidden" name="finding_id"><input type="hidden" name="before_hash">
+      <label>Kildeside<select name="source_url" required></select></label>
+      <label>Nuværende link<input name="old_url" readonly></label>
+      <label>Nyt link<input name="new_url" type="url" required placeholder="https://example.dk/ny-side"></label>
+      <div class="form-grid repair-text-fields"><label>Nuværende ankertekst<input name="old_anchor_text" readonly></label><label>Ny ankertekst<input name="new_anchor_text" maxlength="500" placeholder="Lad teksten stå uændret"></label></div>
+      <div class="repair-preview" id="repair-preview" hidden></div>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close-dialog>Annuller</button><button type="button" class="button secondary" id="preview-repair">Kontroller ændring</button><button type="submit" class="button primary" id="apply-repair" disabled>Godkend og ret</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="restore-dialog">
+    <form method="dialog" id="restore-form">
+      <div class="dialog-head"><div><p class="eyebrow">GENDANNELSE</p><h2>Gendan seneste backup</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
+      <p class="dialog-note">Alle nuværende LinkVagt-data erstattes med indholdet fra den seneste backup. Der oprettes automatisk en nødbackup først.</p>
+      <label>Skriv GENDAN for at fortsætte<input name="confirmation" required autocomplete="off" pattern="GENDAN" placeholder="GENDAN"></label>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close-dialog>Annuller</button><button type="submit" class="button danger" id="confirm-restore">Gendan data</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toasts" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

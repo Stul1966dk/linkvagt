@@ -1,0 +1,33 @@
+.linkvagt-gate,
+#linkvagt-app {
+    box-sizing: border-box;
+    margin: 4rem auto;
+    max-width: 72rem;
+    padding: 2rem;
+}
+
+.linkvagt-gate {
+    background: #fff;
+    border: 1px solid #dce2ea;
+    border-radius: 16px;
+    box-shadow: 0 20px 55px rgb(15 23 42 / 8%);
+    color: #152238;
+}
+
+.linkvagt-login-button {
+    background: #166534;
+    border-radius: 8px;
+    color: #fff;
+    display: inline-block;
+    font-weight: 700;
+    padding: .8rem 1.2rem;
+    text-decoration: none;
+}
+
+.linkvagt-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    color: #991b1b;
+    padding: .8rem 1rem;
+}

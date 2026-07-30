@@ -1,0 +1,7 @@
+data/
+Backup/
+*.log
+.env
+.claude/settings.local.json
+node_modules/
+dist/

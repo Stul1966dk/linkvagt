@@ -1,0 +1,14 @@
+{
+  "name": "linkvagt",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Letvaegts-dashboard til overvagning af doede links og redirects",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
