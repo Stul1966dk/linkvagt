@@ -69,6 +69,11 @@ final class Rest
             'callback' => [$this, 'diagnostics'],
             'permission_callback' => [$this, 'can_read'],
         ]);
+        register_rest_route(self::NS, '/audit-log', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'audit_log'],
+            'permission_callback' => [$this, 'can_manage'],
+        ]);
         register_rest_route(self::NS, '/settings/mail', [
             [
                 'methods' => WP_REST_Server::READABLE,
@@ -645,6 +650,25 @@ final class Rest
             }
         }
         return ['items' => $rows, 'counts' => $counts];
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function audit_log(WP_REST_Request $request): array
+    {
+        global $wpdb;
+        $table = Schema::table('audit_log');
+        $limit = min(200, max(10, absint($request->get_param('limit')) ?: 50));
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, action, object_type, object_id, created_at
+             FROM {$table} ORDER BY id DESC LIMIT %d",
+            $limit
+        ), ARRAY_A) ?: [];
+        foreach ($rows as &$row) {
+            $row['id'] = (int) $row['id'];
+            $row['object_id'] = isset($row['object_id']) ? (int) $row['object_id'] : null;
+        }
+        unset($row);
+        return $rows;
     }
 
     private function validate_site(WP_REST_Request $request): array|WP_Error

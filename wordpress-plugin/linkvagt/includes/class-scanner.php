@@ -10,13 +10,16 @@ use WP_REST_Request;
 final class Scanner
 {
     private const HOOK = 'linkvagt_process_job';
+    private const PRUNE_DIAGNOSTICS_HOOK = 'linkvagt_prune_diagnostics';
+    private const FALLBACK_HOOK = 'linkvagt_fallback_tick';
+    private const DIAGNOSTICS_RETENTION_DAYS = 90;
     private const HTTP_TIMEOUT = 10;
     private const MAX_BODY_BYTES = 5_000_000;
     private const MAX_REDIRECTS = 10;
-    private const PAGE_BATCH = 2;
-    private const LINK_BATCH = 2;
-    private const MAX_JOBS_PER_RUN = 2;
-    private const MAX_RUN_SECONDS = 15.0;
+    private const PAGE_BATCH = 6;
+    private const LINK_BATCH = 6;
+    private const MAX_JOBS_PER_RUN = 6;
+    private const MAX_RUN_SECONDS = 20.0;
 
     private static ?self $instance = null;
     private float $run_started_at = 0.0;
@@ -34,6 +37,10 @@ final class Scanner
         add_filter('cron_schedules', [$this, 'cron_schedule']);
         add_action(self::HOOK, [$this, 'process_next']);
         add_action('init', [$this, 'ensure_schedule']);
+        add_action('init', [$this, 'ensure_diagnostics_prune_schedule']);
+        add_action(self::PRUNE_DIAGNOSTICS_HOOK, [$this, 'prune_diagnostics']);
+        add_action('init', [$this, 'ensure_fallback_schedule']);
+        add_action(self::FALLBACK_HOOK, [$this, 'run_fallback_tick']);
     }
 
     public function cron_schedule(array $schedules): array
@@ -41,6 +48,10 @@ final class Scanner
         $schedules['linkvagt_minute'] = [
             'interval' => 60,
             'display' => 'Hvert minut (LinkVagt)',
+        ];
+        $schedules['linkvagt_five_minutes'] = [
+            'interval' => 300,
+            'display' => 'Hvert 5. minut (LinkVagt nødplan)',
         ];
         return $schedules;
     }
@@ -50,6 +61,41 @@ final class Scanner
         if (!wp_next_scheduled(self::HOOK)) {
             wp_schedule_event(time() + 20, 'linkvagt_minute', self::HOOK);
         }
+    }
+
+    public function ensure_diagnostics_prune_schedule(): void
+    {
+        if (!wp_next_scheduled(self::PRUNE_DIAGNOSTICS_HOOK)) {
+            wp_schedule_event(time() + 600, 'daily', self::PRUNE_DIAGNOSTICS_HOOK);
+        }
+    }
+
+    public function prune_diagnostics(): void
+    {
+        global $wpdb;
+        $table = Schema::table('diagnostics');
+        $cutoff = gmdate('Y-m-d H:i:s', time() - self::DIAGNOSTICS_RETENTION_DAYS * DAY_IN_SECONDS);
+        $wpdb->query($wpdb->prepare("DELETE FROM {$table} WHERE created_at < %s", $cutoff));
+    }
+
+    public function ensure_fallback_schedule(): void
+    {
+        if (!wp_next_scheduled(self::FALLBACK_HOOK)) {
+            wp_schedule_event(time() + 120, 'linkvagt_five_minutes', self::FALLBACK_HOOK);
+        }
+    }
+
+    /**
+     * Safety net for the tasks that normally only run via the dedicated
+     * worker URL (see external_tick()). If that external cron ever stops
+     * being called, these still happen via WordPress' own cron, just less
+     * often, instead of silently never running at all.
+     */
+    public function run_fallback_tick(): void
+    {
+        Scheduler::instance()->run_due_schedule();
+        Reporter::instance()->send_pending_manual_report();
+        $this->purge_excluded_queued_links();
     }
 
     public function wake(): void
@@ -210,7 +256,7 @@ final class Scanner
             return;
         }
 
-        $pages = $this->sitemap_pages($site);
+        $pages = $this->sitemap_pages($scan_id, $site);
         if (!$pages) {
             $pages = [(string) $site['base_url']];
         }
@@ -244,13 +290,13 @@ final class Scanner
             if (!$page || $page['status'] === 'completed') {
                 continue;
             }
-            $document = $this->fetch_document((string) $page['page_url'], 'text/html');
+            $document = $this->fetch_document($scan_id, (string) $page['page_url'], 'text/html');
             if (is_wp_error($document)) {
                 $this->diagnostic($scan_id, (int) $site['id'], 'warning', 'page_fetch', (string) $page['page_url'], $document->get_error_message());
                 $wpdb->update($page_table, ['status' => 'failed', 'updated_at' => current_time('mysql', true)], ['id' => $page_id]);
                 continue;
             }
-            $links = $this->extract_links($document, (string) $page['page_url']);
+            $links = $this->extract_links($document['body'], $document['url']);
             foreach ($links as $link) {
                 $link_id = $this->register_link($scan_id, $link['url'], [[
                     'source_url' => (string) $page['page_url'],
@@ -356,7 +402,11 @@ final class Scanner
                 ];
             }
             $status = wp_remote_retrieve_response_code($response);
-            if (in_array($status, [405, 501], true)) {
+            // Some servers/CDNs mishandle HEAD requests and answer 404 even
+            // though the same URL works fine over GET (confirmed in
+            // practice, e.g. danskindustri.dk) — not just the 405/501 a
+            // spec-compliant server would use for "method not supported".
+            if (in_array($status, [404, 405, 501], true)) {
                 $response = $this->safe_request($current, 'GET', 1024);
                 if (is_wp_error($response)) {
                     return [
@@ -438,21 +488,50 @@ final class Scanner
         return $generated;
     }
 
-    private function fetch_document(string $url, string $accept): string|WP_Error
+    /**
+     * Fetches a document, following redirects like a browser would (unlike
+     * safe_request(), which leaves redirects to the caller). Exclusions are
+     * checked before every hop, so a page that redirects to an excluded
+     * domain is never actually requested.
+     *
+     * @return array{url:string,body:string}|WP_Error
+     */
+    private function fetch_document(int $scan_id, string $url, string $accept): array|WP_Error
     {
-        $response = $this->safe_request($url, 'GET', self::MAX_BODY_BYTES);
-        if (is_wp_error($response)) {
-            return $response;
+        $current = $url;
+        $seen = [];
+        for ($hop = 0; $hop <= self::MAX_REDIRECTS; ++$hop) {
+            if ($this->is_excluded($scan_id, $current)) {
+                return new WP_Error('excluded_redirect', 'Siden omdirigerer til et ekskluderet domæne.');
+            }
+            if (in_array($current, $seen, true)) {
+                return new WP_Error('redirect_loop', 'Siden omdirigerer i en løkke.');
+            }
+            $seen[] = $current;
+            $response = $this->safe_request($current, 'GET', self::MAX_BODY_BYTES);
+            if (is_wp_error($response)) {
+                return $response;
+            }
+            $status = wp_remote_retrieve_response_code($response);
+            if ($status >= 300 && $status < 400) {
+                $location = wp_remote_retrieve_header($response, 'location');
+                $next = $location ? $this->absolute_url((string) $location, $current) : null;
+                if (!$next) {
+                    return new WP_Error('redirect_without_location', 'Siden omdirigerer uden en gyldig adresse.');
+                }
+                $current = $next;
+                continue;
+            }
+            if ($status < 200 || $status >= 300) {
+                return new WP_Error('http_' . $status, "Siden svarede med HTTP {$status}.");
+            }
+            $type = strtolower((string) wp_remote_retrieve_header($response, 'content-type'));
+            if ($accept === 'text/html' && $type !== '' && !str_contains($type, 'html')) {
+                return new WP_Error('unexpected_content_type', 'Siden returnerede ikke HTML.');
+            }
+            return ['url' => $current, 'body' => (string) wp_remote_retrieve_body($response)];
         }
-        $status = wp_remote_retrieve_response_code($response);
-        if ($status < 200 || $status >= 300) {
-            return new WP_Error('http_' . $status, "Siden svarede med HTTP {$status}.");
-        }
-        $type = strtolower((string) wp_remote_retrieve_header($response, 'content-type'));
-        if ($accept === 'text/html' && $type !== '' && !str_contains($type, 'html')) {
-            return new WP_Error('unexpected_content_type', 'Siden returnerede ikke HTML.');
-        }
-        return (string) wp_remote_retrieve_body($response);
+        return new WP_Error('too_many_redirects', 'Siden omdirigerer for mange gange.');
     }
 
     /** @return list<array{url:string,text:string}> */
@@ -485,7 +564,7 @@ final class Scanner
     }
 
     /** @return list<string> */
-    private function sitemap_pages(array $site): array
+    private function sitemap_pages(int $scan_id, array $site): array
     {
         $queue = (array) ($site['sitemap_urls'] ?? []);
         if (!$queue) {
@@ -499,10 +578,11 @@ final class Scanner
                 continue;
             }
             $seen[$url] = true;
-            $xml = $this->fetch_document($url, 'application/xml');
-            if (is_wp_error($xml)) {
+            $document = $this->fetch_document($scan_id, $url, 'application/xml');
+            if (is_wp_error($document)) {
                 continue;
             }
+            $xml = $document['body'];
             if (!preg_match_all('~<loc\b[^>]*>(.*?)</loc>~is', $xml, $matches)) {
                 continue;
             }

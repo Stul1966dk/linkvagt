@@ -59,6 +59,18 @@ final class Reporter
         if (in_array((string) ($scan['report_status'] ?? ''), ['sent', 'skipped', 'deferred'], true)) {
             return;
         }
+        // Claim the scan atomically before doing anything else that could
+        // lead to sending mail. The instant scan-completed hook, the worker
+        // URL, and the wp-cron fallback can all reach this point for the
+        // same scan, and must not both win the race and send it twice.
+        $claimed = $wpdb->query($wpdb->prepare(
+            "UPDATE {$scans} SET report_status='sending'
+             WHERE id=%d AND (report_status IS NULL OR report_status='failed')",
+            $scan_id
+        ));
+        if (!$claimed) {
+            return;
+        }
         if (($scan['scan_origin'] ?? 'manual') === 'scheduled') {
             $wpdb->update($scans, ['report_status' => 'deferred'], ['id' => $scan_id]);
             return;

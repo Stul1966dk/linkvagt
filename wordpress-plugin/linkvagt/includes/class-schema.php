@@ -6,7 +6,7 @@ namespace LinkVagt;
 
 final class Schema
 {
-    public const VERSION = '6';
+    public const VERSION = '7';
 
     public static function table(string $name): string
     {
@@ -238,7 +238,7 @@ final class Schema
         dbDelta("CREATE TABLE {$members} (
             id bigint unsigned NOT NULL AUTO_INCREMENT,
             wp_user_id bigint unsigned NOT NULL,
-            provider varchar(30) NOT NULL DEFAULT 'google',
+            provider varchar(30) NOT NULL DEFAULT 'wordpress',
             provider_subject varchar(191) NOT NULL,
             email varchar(191) NOT NULL,
             display_name varchar(191) NOT NULL,
@@ -280,6 +280,23 @@ final class Schema
             KEY member_created (member_id,created_at),
             KEY action_created (action,created_at)
         ) {$charset};");
+
+        self::migrate_members_to_wordpress_provider();
+    }
+
+    /**
+     * LinkVagt loggede tidligere ind via Google OIDC, hvor identiteten var
+     * Googles subject-id. Efter skiftet til WordPress-login er identiteten
+     * WordPress-bruger-id'et. Idempotent.
+     */
+    private static function migrate_members_to_wordpress_provider(): void
+    {
+        global $wpdb;
+        $members = self::table('members');
+        $wpdb->query(
+            "UPDATE {$members} SET provider='wordpress', provider_subject=wp_user_id
+             WHERE provider<>'wordpress'"
+        );
     }
 
     private static function ensure_app_page(): void

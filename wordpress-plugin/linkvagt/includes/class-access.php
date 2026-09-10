@@ -50,15 +50,7 @@ final class Access
             return false;
         }
 
-        $user = wp_get_current_user();
-        if (self::is_active_member((int) $user->ID)) {
-            return true;
-        }
-
-        // Local keeps a narrow bootstrap path while Google cannot redirect to a
-        // .local domain. This branch can never authorize production.
-        return wp_get_environment_type() === 'local'
-            && strtolower((string) $user->user_email) === self::owner_email();
+        return self::is_active_member(get_current_user_id());
     }
 
     public static function is_active_member(int $wp_user_id): bool

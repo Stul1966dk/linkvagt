@@ -1,8 +1,33 @@
 # LinkVagt WordPress-plugin
 
 LinkVagt installeres på ét centralt WordPress-site og scanner andre websites
-eksternt. Produktionsadgang sker med Google OpenID Connect. Der er ingen
-offentlig registrering.
+eksternt. Adgang sker med WordPress' eget login. Der er ingen offentlig
+registrering.
+
+## Login og to-faktor
+
+LinkVagt har ingen selvstændig loginformular. Gæsteskærmen sender brugeren til
+`wp-login.php` og videre tilbage til appsiden bagefter. Alt hvad der allerede
+beskytter WordPress-loginet — to-faktor, brute force-beskyttelse,
+adgangskodepolitik — beskytter dermed også LinkVagt. Et 2FA-plugin på sitet
+gælder automatisk her.
+
+Til gengæld er `wp-login.php` nu den eneste angrebsflade mod LinkVagt. Den bør
+have både to-faktor og en form for rate limiting.
+
+## Roller og adgang
+
+Adgang kræver en aktiv række i `wp_linkvagt_members`. Rækken oprettes
+automatisk, første gang en berettiget WordPress-bruger åbner appsiden:
+
+1. Brugerens mail matcher `LINKVAGT_OWNER_EMAIL` → rollen `owner`.
+2. Der findes en gyldig, uindløst invitation til mailen → invitationens rolle.
+3. Medlemstabellen er tom, og brugeren er WordPress-administrator → `owner`.
+   Denne bootstrap lukker sig selv, så snart der findes ét medlem.
+
+Alle andre får besked om manglende adgang. Capabilities synkroniseres ved hver
+sidevisning, så en rolleændring i tabellen slår igennem med det samme — også
+nedgraderinger og spærring (`status` ≠ `active`).
 
 ## Sikker konfiguration
 
@@ -10,22 +35,12 @@ Tilføj værdierne i `wp-config.php` over linjen `/* That's all, stop editing! *
 
 ```php
 define('LINKVAGT_OWNER_EMAIL', 'stig@su-media.dk');
-define('LINKVAGT_GOOGLE_CLIENT_ID', '...');
-define('LINKVAGT_GOOGLE_CLIENT_SECRET', '...');
-define(
-    'LINKVAGT_GOOGLE_REDIRECT_URI',
-    'https://su-media.dk/wp-json/linkvagt/v1/auth/google/callback'
-);
 define('LINKVAGT_ENCRYPTION_KEY', 'base64-kodet-32-byte-nøgle');
 // Valgfrit: brug en mappe uden for webroden.
 define('LINKVAGT_BACKUP_DIR', '/sikker/sti/linkvagt-backups');
 ```
 
 Hemmeligheder må ikke gemmes i pluginets kildekode eller versionsstyring.
-
-På Local kan en allerede logget WordPress-ejer bruge appen, fordi Google ikke
-accepterer `.local` som produktionscallback. Denne bootstrapadgang er teknisk
-begrænset til WordPress-miljøtypen `local` og virker ikke i produktion.
 
 ## Automatisk scanning
 

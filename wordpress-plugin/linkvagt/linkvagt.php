@@ -2,7 +2,7 @@
 /**
  * Plugin Name: LinkVagt
  * Description: Centralt kontrolpanel til scanning og sikker rettelse af links på eksterne websites.
- * Version: 0.3.3
+ * Version: 0.4.0
  * Requires at least: 6.9
  * Requires PHP: 8.1
  * Author: SU Media
@@ -15,14 +15,14 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('LINKVAGT_VERSION', '0.3.3');
+define('LINKVAGT_VERSION', '0.4.0');
 define('LINKVAGT_FILE', __FILE__);
 define('LINKVAGT_DIR', plugin_dir_path(__FILE__));
 define('LINKVAGT_URL', plugin_dir_url(__FILE__));
 
 require_once LINKVAGT_DIR . 'includes/class-schema.php';
 require_once LINKVAGT_DIR . 'includes/class-access.php';
-require_once LINKVAGT_DIR . 'includes/class-google-auth.php';
+require_once LINKVAGT_DIR . 'includes/class-auth.php';
 require_once LINKVAGT_DIR . 'includes/class-crypto.php';
 require_once LINKVAGT_DIR . 'includes/class-backup.php';
 require_once LINKVAGT_DIR . 'includes/class-wordpress-service.php';

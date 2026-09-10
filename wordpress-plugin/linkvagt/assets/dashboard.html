@@ -172,6 +172,7 @@
             <button data-support-target="support-results">Resultater</button>
             <button data-support-target="support-wordpress">WordPress</button>
             <button data-support-target="support-diagnostics">Diagnostik</button>
+            <button data-support-target="support-audit">Aktivitetslog</button>
             <button data-support-target="support-backup">Backup og gendannelse</button>
             <button data-support-target="support-data">Data og sikkerhed</button>
           </nav>
@@ -217,6 +218,14 @@
                 <label>Vis<select id="diagnostic-severity"><option value="all">Alt</option><option value="error">Kun fejl</option><option value="warning">Kun advarsler</option></select></label>
               </div>
               <div class="diagnostic-list" id="diagnostic-list"></div>
+            </section>
+            <section id="support-audit">
+              <p class="eyebrow">SPORBARHED</p>
+              <div class="diagnostic-heading">
+                <div><h2>Aktivitetslog</h2><p>De seneste handlinger i LinkVagt, som websites oprettet, indstillinger ændret og linkrettelser godkendt.</p></div>
+                <button type="button" class="button secondary" id="refresh-audit-log">Opdater</button>
+              </div>
+              <div class="activity-list" id="audit-log-list"></div>
             </section>
             <section id="support-backup">
               <p class="eyebrow">SIKKERHEDSKOPI</p>

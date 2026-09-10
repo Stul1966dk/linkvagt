@@ -19,7 +19,7 @@ final class Plugin
             Schema::install();
             update_option('linkvagt_schema_version', Schema::VERSION, false);
         }
-        Google_Auth::instance()->register();
+        Auth::instance()->register();
         Backup::instance()->register();
         WordPress_Service::instance()->register();
         Scanner::instance()->register();
@@ -42,6 +42,13 @@ final class Plugin
         header('Referrer-Policy: no-referrer');
         header('X-Frame-Options: DENY');
         header("Content-Security-Policy: frame-ancestors 'none'");
+        header('X-Robots-Tag: noindex, nofollow, noarchive');
+
+        // Brugeren kan være logget ind i WordPress uden at have været forbi
+        // wp_login-hooket i denne session. Provisioneringen er idempotent.
+        if (is_user_logged_in()) {
+            Auth::instance()->provision(wp_get_current_user());
+        }
     }
 
     public function app_template(string $template): string

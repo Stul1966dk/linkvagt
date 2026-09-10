@@ -59,6 +59,15 @@ function toast(message, type = '') {
   setTimeout(() => element.remove(), 4200);
 }
 
+let refreshTimer = null;
+
+function stopAutoRefresh() {
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
 $('#account-email').textContent = window.LINKVAGT.currentUser?.email || '';
 $('#logout-button').addEventListener('click', async () => {
   const button = $('#logout-button');
@@ -66,7 +75,11 @@ $('#logout-button').addEventListener('click', async () => {
   button.textContent = 'Logger ud…';
   try {
     const result = await api('/auth/logout', { method: 'POST', body: '{}' });
-    window.location.assign(result.login_url);
+    // Sessionen er væk, så baggrundsopdateringen skal stoppe med det samme —
+    // ellers kalder den videre mod et dashboard, den ikke længere må se.
+    stopAutoRefresh();
+    // replace, ikke assign: det udloggede dashboard hører ikke til i historikken.
+    window.location.replace(result.login_url);
   } catch (error) {
     button.disabled = false;
     button.textContent = 'Log ud';
@@ -489,6 +502,44 @@ async function loadDiagnostics() {
   renderDiagnostics();
 }
 
+const auditActionName = (action) => ({
+  'auth.login_succeeded': 'Login gennemført',
+  'auth.logout': 'Logget ud',
+  'auth.state_rejected': 'Login afvist (ugyldig tilstand)',
+  'auth.token_exchange_failed': 'Login fejlede (Google kunne ikke kontaktes)',
+  'auth.token_exchange_rejected': 'Login afvist af Google',
+  'auth.id_token_rejected': 'Login afvist (ugyldig identitet)',
+  'auth.identity_rejected': 'Login afvist (ingen adgang)',
+  'site.created': 'Hjemmeside oprettet',
+  'site.updated': 'Hjemmeside opdateret',
+  'site.deleted': 'Hjemmeside slettet',
+  'scan.queued': 'Scanning sat i kø',
+  'wordpress.connection_saved': 'WordPress-forbindelse gemt',
+  'wordpress.connection_deleted': 'WordPress-forbindelse fjernet',
+  'wordpress.change_applied': 'Link rettet i WordPress',
+  'wordpress.change_undone': 'Linkrettelse fortrudt',
+  'ignore.created': 'Link ignoreret',
+  'ignore.deleted': 'Ignorering fjernet',
+  'settings.mail_updated': 'Mailindstillinger gemt',
+  'settings.test_mail_sent': 'Testmail sendt',
+  'settings.exclusions_updated': 'Ekskluderinger opdateret',
+  'report.sent': 'Rapport sendt',
+  'report.failed': 'Rapport kunne ikke sendes',
+  'batch_report.sent': 'Samlerapport sendt',
+  'batch_report.failed': 'Samlerapport kunne ikke sendes'
+}[action] || action);
+
+function renderAuditLog(items) {
+  $('#audit-log-list').innerHTML = items.length ? items.map((item) => {
+    const subtitle = item.object_type ? `${escapeHtml(item.object_type)}${item.object_id ? ` #${item.object_id}` : ''}` : '';
+    return `<div class="activity"><span class="activity-dot"></span><div><strong>${escapeHtml(auditActionName(item.action))}</strong><small>${subtitle}</small></div><time>${fmtDate(item.created_at)}</time></div>`;
+  }).join('') : '<div class="empty"><strong>Ingen hændelser endnu</strong>Handlinger i LinkVagt vil blive vist her.</div>';
+}
+
+async function loadAuditLog() {
+  renderAuditLog(await api('/api/audit-log'));
+}
+
 function renderWordpressHistory(changes) {
   $('#wordpress-history').innerHTML = changes.length ? `<h3>Seneste ændringer</h3>${changes.map((change) => {
     const anchorChange = change.old_anchor_text !== change.new_anchor_text && change.new_anchor_text
@@ -559,7 +610,7 @@ document.addEventListener('click', async (event) => {
       Promise.all([loadMailSettings(), loadExclusionSettings(), loadBackupStatus(), loadScheduleStatus()]).catch((error) => toast(error.message, 'error'));
     }
     if (nav.dataset.view === 'support') {
-      Promise.all([loadBackupStatus(), loadDiagnostics()]).catch((error) => toast(error.message, 'error'));
+      Promise.all([loadBackupStatus(), loadDiagnostics(), loadAuditLog()]).catch((error) => toast(error.message, 'error'));
     }
     return;
   }
@@ -899,7 +950,10 @@ $('#refresh-diagnostics').addEventListener('click', () => {
   loadDiagnostics().then(() => toast('Diagnostikken er opdateret')).catch((error) => toast(error.message, 'error'));
 });
 $('#diagnostic-site').addEventListener('change', () => loadDiagnostics().catch((error) => toast(error.message, 'error')));
+$('#refresh-audit-log').addEventListener('click', () => {
+  loadAuditLog().then(() => toast('Aktivitetsloggen er opdateret')).catch((error) => toast(error.message, 'error'));
+});
 $('#diagnostic-severity').addEventListener('change', renderDiagnostics);
 
 loadBase().catch((error) => toast(error.message, 'error'));
-setInterval(() => loadBase().catch(() => {}), 8000);
+refreshTimer = setInterval(() => loadBase().catch(() => {}), 8000);

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use LinkVagt\Access;
-use LinkVagt\Google_Auth;
+use LinkVagt\Auth;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -23,14 +23,16 @@ if (!Access::can_access()) {
     <body>
         <main class="linkvagt-gate">
             <h1>LinkVagt</h1>
-            <?php if (Google_Auth::instance()->configured()) : ?>
-                <p>Log ind med din godkendte Google-konto for at fortsætte.</p>
-                <p><a class="linkvagt-login-button" href="<?php echo esc_url(Google_Auth::instance()->login_url()); ?>">Fortsæt med Google</a></p>
-            <?php else : ?>
-                <p>Google-login mangler Client ID og Client Secret i installationens sikre konfiguration.</p>
+            <?php if (isset($_GET['linkvagt_logout'])) : ?>
+                <p>Du er logget ud.</p>
             <?php endif; ?>
-            <?php if (isset($_GET['linkvagt_login_error'])) : ?>
-                <p class="linkvagt-error"><?php echo esc_html(sanitize_text_field(wp_unslash((string) $_GET['linkvagt_login_error']))); ?></p>
+            <?php if (!is_user_logged_in()) : ?>
+                <p>Log ind med din WordPress-konto for at fortsætte.</p>
+                <p><a class="linkvagt-login-button" href="<?php echo esc_url(Auth::instance()->login_url()); ?>">Log ind</a></p>
+            <?php else : ?>
+                <p class="linkvagt-error">Kontoen <?php echo esc_html((string) wp_get_current_user()->user_email); ?> har ikke adgang til LinkVagt.</p>
+                <p>Bed ejeren om en invitation, eller log ind med en anden konto.</p>
+                <p><a class="linkvagt-login-button" href="<?php echo esc_url(Auth::instance()->logout_url()); ?>">Log ud</a></p>
             <?php endif; ?>
         </main>
     </body>
