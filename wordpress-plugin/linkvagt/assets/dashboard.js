@@ -19,7 +19,19 @@ function escapeHtml(value = '') {
   return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
 }
 
-async function api(path, options = {}) {
+// REST-noncen er bundet til WordPress-sessionen og udløber efter højst 24 timer.
+// En fane, der har stået åben længe — eller overlevet et nyt login — sender
+// derfor en forældet nonce, og WordPress svarer "Cookie-tjek mislykkedes".
+// Kernens rest-nonce-handling udsteder en ny, så længe sessionen lever.
+async function refreshNonce() {
+  const response = await fetch(`${window.LINKVAGT.ajaxUrl}?action=rest-nonce`, { credentials: 'same-origin' });
+  const nonce = (await response.text()).trim();
+  if (!response.ok || !/^[a-f0-9]{10}$/i.test(nonce)) return false;
+  window.LINKVAGT.nonce = nonce;
+  return true;
+}
+
+async function api(path, options = {}, retried = false) {
   const apiPath = path.startsWith('/api') ? path.slice(4) : path;
   const response = await fetch(`${window.LINKVAGT.restRoot}${apiPath}`, {
     ...options,
@@ -30,6 +42,16 @@ async function api(path, options = {}) {
     },
     credentials: 'same-origin'
   });
+  if (response.status === 403 && !retried) {
+    const body = await response.clone().json().catch(() => ({}));
+    if (body.code === 'rest_cookie_invalid_nonce') {
+      if (await refreshNonce()) return api(path, options, true);
+      // Sessionen er udløbet: siden viser selv login-skærmen ved genindlæsning.
+      stopAutoRefresh();
+      window.location.reload();
+      throw new Error('Din session er udløbet. Log ind igen.');
+    }
+  }
   if (response.status === 204) return null;
   const raw = await response.text();
   let data;

@@ -48,6 +48,7 @@ if (!is_string($shell)) {
 $configuration = [
     'restRoot' => esc_url_raw(rest_url('linkvagt/v1')),
     'nonce' => wp_create_nonce('wp_rest'),
+    'ajaxUrl' => esc_url_raw(admin_url('admin-ajax.php')),
     'exportUrl' => esc_url_raw(admin_url('admin-post.php?action=linkvagt_export')),
     'exportNonce' => wp_create_nonce('linkvagt_export'),
     'currentUser' => [
