@@ -257,12 +257,20 @@ function renderScans() {
   }).join('') : emptyRow(7, 'Ingen scanninger', 'Der er ingen scanninger, der matcher filteret.');
 }
 
+// Et fund kan være tilsidesat af en regel: "ignored" (kendt problem) eller
+// "ok" (godkendt manuelt som virkende). Så tæller det ikke som problem.
+const effectiveCategory = (finding) => (finding.override === 'ok' ? 'ok' : finding.category);
+const isProblem = (finding) => !finding.override && ['broken', 'redirect', 'warning'].includes(finding.category);
+
 function categoryBadge(finding) {
   const redirectStatus = finding.redirect_chain?.[0]?.status;
   const detail = finding.category === 'redirect' && redirectStatus
     ? `${redirectStatus} → ${finding.status_code || '?'}`
     : finding.status_code || finding.error_type || '-';
-  return `<span class="badge ${finding.category}">${statusName(finding.category)} · ${escapeHtml(detail)}</span>`;
+  const scanned = `${statusName(finding.category)} · ${escapeHtml(detail)}`;
+  if (finding.override === 'ignored') return `<span class="badge ignored">Ignoreret</span><small>Scanner: ${scanned}</small>`;
+  if (finding.override === 'ok') return `<span class="badge ok">Virker · godkendt</span><small>Scanner: ${scanned}</small>`;
+  return `<span class="badge ${finding.category}">${scanned}</span>`;
 }
 
 function redirectKind(finding) {
@@ -284,7 +292,7 @@ function sortFindings(findings) {
   const multiplier = direction === 'asc' ? 1 : -1;
   const categoryRank = { broken: 1, redirect: 2, warning: 3, ok: 4 };
   const valueFor = (finding) => {
-    if (key === 'category') return `${categoryRank[finding.category] || 9}-${finding.status_code || finding.error_type || ''}`;
+    if (key === 'category') return `${finding.override === 'ignored' ? 5 : categoryRank[effectiveCategory(finding)] || 9}-${finding.status_code || finding.error_type || ''}`;
     if (key === 'destination') return finding.destination_url;
     if (key === 'source') return finding.sources[0]?.source_url || '';
     if (key === 'firstSeen') return new Date(finding.first_seen_at).getTime() || 0;
@@ -316,12 +324,16 @@ function renderFindings() {
   const search = $('#finding-search').value.toLowerCase();
   const showIgnored = $('#show-ignored').checked;
   const filtered = sortFindings(state.findings.filter((finding) => {
-    const category = state.resultCategory === 'all' || finding.category === state.resultCategory;
+    const category = state.resultCategory === 'all' || effectiveCategory(finding) === state.resultCategory;
     const text = `${finding.destination_url} ${finding.final_url || ''} ${finding.sources.map((source) => `${source.source_url} ${source.link_text || ''}`).join(' ')}`.toLowerCase();
     return category && text.includes(search) && (showIgnored || !finding.ignored);
   }));
   $('#findings-table').innerHTML = filtered.length ? filtered.map((finding) => {
-    const sourceMarkup = (source) => `<div class="source-item"><a href="${escapeHtml(source.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(source.source_url)}</a><small><strong>Ankertekst:</strong> ${escapeHtml(source.link_text || '(ingen synlig tekst)')}</small></div>`;
+    // En regel for én kildeside vises ved kilden, når den ikke dækker hele fundet.
+    const sourceOverride = (source) => !finding.override && source.override
+      ? `<small class="source-override">${source.override === 'ok' ? 'Godkendt som virkende på denne side' : 'Ignoreret på denne side'} <button type="button" class="text-button" data-action="unignore" data-rule="${source.override_rule_id}">Aktivér</button></small>`
+      : '';
+    const sourceMarkup = (source) => `<div class="source-item"><a href="${escapeHtml(source.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(source.source_url)}</a><small><strong>Ankertekst:</strong> ${escapeHtml(source.link_text || '(ingen synlig tekst)')}</small>${sourceOverride(source)}</div>`;
     const sources = finding.sources.slice(0, 2).map(sourceMarkup).join('');
     const moreSources = finding.sources.slice(2);
     const more = moreSources.length
@@ -334,10 +346,20 @@ function renderFindings() {
       ? `<small><span class="redirect-kind">${escapeHtml(redirectKind(finding))}</span>→ ${escapeHtml(finding.final_url)}</small>`
       : finding.error_type ? `<small>${escapeHtml(finding.error_message || finding.error_type.replaceAll('_', ' '))}</small>${verification}` : '';
     const selectedSite = state.sites.find((site) => site.id === finding.site_id);
-    const canRepair = selectedSite?.wordpress_connected && finding.sources.length && ['broken', 'redirect'].includes(finding.category) && !finding.ignored;
-    return `<tr class="${finding.ignored ? 'ignored-row' : ''}"><td>${categoryBadge(finding)}${finding.ignored ? '<small>Ignoreret</small>' : ''}</td><td><div class="destination"><strong><a href="${escapeHtml(finding.destination_url)}" target="_blank" rel="noreferrer">${escapeHtml(finding.destination_url)}</a></strong>${redirect}</div></td><td><div class="source-list">${sources}${more}</div></td><td>${fmtDate(finding.first_seen_at, false)}</td><td><div class="row-actions"><button class="button secondary" data-action="recheck" data-finding="${finding.id}">Kontrollér igen</button>${canRepair ? `<button class="button primary" data-action="repair" data-finding="${finding.id}">Ret link</button>` : ''}${finding.ignored ? `<button class="button secondary" data-action="unignore" data-rule="${finding.ignore_rule_id}">Aktivér</button>` : finding.category !== 'ok' ? `<button class="button secondary" data-action="ignore" data-finding="${finding.id}">Ignorer</button>` : ''}</div></td></tr>`;
+    const canRepair = selectedSite?.wordpress_connected && finding.sources.length && ['broken', 'redirect'].includes(finding.category) && !finding.override;
+    const ruleActions = finding.override
+      ? `<button class="button secondary" data-action="unignore" data-rule="${finding.override_rule_id}" data-kind="${finding.override}">${finding.override === 'ok' ? 'Fortryd godkendelse' : 'Aktivér'}</button>`
+      : finding.category !== 'ok'
+        ? `<button class="button secondary" data-action="ignore" data-finding="${finding.id}">Ignorer</button>${['broken', 'warning'].includes(finding.category) ? `<button class="button secondary" data-action="mark-ok" data-finding="${finding.id}" title="Linket virker, men LinkVagt kan ikke se det">Virker</button>` : ''}`
+        : '';
+    return `<tr class="${finding.override === 'ignored' ? 'ignored-row' : ''}"><td>${categoryBadge(finding)}</td><td><div class="destination"><strong><a href="${escapeHtml(finding.destination_url)}" target="_blank" rel="noreferrer">${escapeHtml(finding.destination_url)}</a></strong>${redirect}</div></td><td><div class="source-list">${sources}${more}</div></td><td>${fmtDate(finding.first_seen_at, false)}</td><td><div class="row-actions"><button class="button secondary" data-action="recheck" data-finding="${finding.id}">Kontrollér igen</button>${canRepair ? `<button class="button primary" data-action="repair" data-finding="${finding.id}">Ret link</button><button class="button secondary" data-action="unlink" data-finding="${finding.id}">Fjern link</button>` : ''}${ruleActions}</div></td></tr>`;
   }).join('') : emptyRow(5, 'Ingen resultater', 'Ingen links matcher det valgte filter.');
-  const counts = Object.fromEntries(['all', 'broken', 'redirect', 'warning', 'ok'].map((key) => [key, key === 'all' ? state.findings.length : state.findings.filter((finding) => finding.category === key).length]));
+  // Problemfanerne tæller kun links, der ikke er ignoreret eller godkendt.
+  const counts = Object.fromEntries(['all', 'broken', 'redirect', 'warning', 'ok'].map((key) => [key, key === 'all'
+    ? state.findings.length
+    : key === 'ok'
+      ? state.findings.filter((finding) => effectiveCategory(finding) === 'ok').length
+      : state.findings.filter((finding) => isProblem(finding) && finding.category === key).length]));
   for (const [key, value] of Object.entries(counts)) $(`#count-${key}`).textContent = value;
   renderFindingSort();
 }
@@ -540,8 +562,10 @@ const auditActionName = (action) => ({
   'wordpress.connection_deleted': 'WordPress-forbindelse fjernet',
   'wordpress.change_applied': 'Link rettet i WordPress',
   'wordpress.change_undone': 'Linkrettelse fortrudt',
+  'wordpress.link_removed': 'Link fjernet i WordPress (tekst bevaret)',
   'ignore.created': 'Link ignoreret',
   'ignore.deleted': 'Ignorering fjernet',
+  'ignore.marked_ok': 'Link godkendt som virkende',
   'settings.mail_updated': 'Mailindstillinger gemt',
   'settings.test_mail_sent': 'Testmail sendt',
   'settings.exclusions_updated': 'Ekskluderinger opdateret',
@@ -567,7 +591,7 @@ function renderWordpressHistory(changes) {
     const anchorChange = change.old_anchor_text !== change.new_anchor_text && change.new_anchor_text
       ? `<small>“${escapeHtml(change.old_anchor_text || '')}” → “${escapeHtml(change.new_anchor_text)}”</small>`
       : '';
-    return `<div class="history-row"><div><strong>${escapeHtml(change.post_title || change.source_url)}</strong><small>${escapeHtml(change.old_url)} → ${escapeHtml(change.new_url)}</small>${anchorChange}</div><span class="badge ${change.status === 'applied' ? 'completed' : change.status === 'failed' ? 'failed' : 'warning'}">${escapeHtml({ applied: 'Rettet', undone: 'Fortrudt', rolled_back: 'Gendannet', failed: 'Fejlet', pending: 'I gang' }[change.status] || change.status)}</span>${change.status === 'applied' ? `<button type="button" class="button secondary" data-action="undo-change" data-change="${change.id}">Fortryd</button>` : ''}</div>`;
+    return `<div class="history-row"><div><strong>${escapeHtml(change.post_title || change.source_url)}</strong><small>${escapeHtml(change.old_url)} → ${change.new_url ? escapeHtml(change.new_url) : 'link fjernet, tekst bevaret'}</small>${anchorChange}</div><span class="badge ${change.status === 'applied' ? 'completed' : change.status === 'failed' ? 'failed' : 'warning'}">${escapeHtml({ applied: 'Rettet', undone: 'Fortrudt', rolled_back: 'Gendannet', failed: 'Fejlet', pending: 'I gang' }[change.status] || change.status)}</span>${change.status === 'applied' ? `<button type="button" class="button secondary" data-action="undo-change" data-change="${change.id}">Fortryd</button>` : ''}</div>`;
   }).join('')}` : '';
 }
 
@@ -598,9 +622,24 @@ function resetRepairPreview() {
   $('#apply-repair').disabled = true;
 }
 
-function openRepairDialog(finding) {
+function repairMode() {
+  return $('#repair-form').elements.repair_mode.value;
+}
+
+function syncRepairMode() {
+  const unlink = repairMode() === 'unlink';
+  const form = $('#repair-form');
+  $$('[data-repair-replace]', form).forEach((element) => { element.hidden = unlink; });
+  $$('[data-repair-unlink]', form).forEach((element) => { element.hidden = !unlink; });
+  form.elements.new_url.required = !unlink;
+  $('#apply-repair').textContent = unlink ? 'Godkend og fjern link' : 'Godkend og ret';
+}
+
+function openRepairDialog(finding, mode = 'replace') {
   const form = $('#repair-form');
   form.reset();
+  form.elements.repair_mode.value = mode;
+  syncRepairMode();
   form.elements.finding_id.value = finding.id;
   form.elements.old_url.value = finding.destination_url;
   form.elements.new_url.value = finding.category === 'redirect' ? finding.final_url || '' : '';
@@ -672,9 +711,9 @@ document.addEventListener('click', async (event) => {
       $('#ignore-link').textContent = finding.destination_url;
       $('#ignore-dialog').showModal();
     }
-    if (action.dataset.action === 'repair') {
+    if (action.dataset.action === 'repair' || action.dataset.action === 'unlink') {
       const finding = state.findings.find((item) => item.id === Number(action.dataset.finding));
-      openRepairDialog(finding);
+      openRepairDialog(finding, action.dataset.action === 'unlink' ? 'unlink' : 'replace');
     }
     if (action.dataset.action === 'recheck') {
       const finding = state.findings.find((item) => item.id === Number(action.dataset.finding));
@@ -687,10 +726,20 @@ document.addEventListener('click', async (event) => {
       showView('scans');
       toast(source ? 'Kildesiden er sat i kø til ny kontrol' : 'Linket er sat i kø til ny kontrol');
     }
+    if (action.dataset.action === 'mark-ok') {
+      const finding = state.findings.find((item) => item.id === Number(action.dataset.finding));
+      if (!window.confirm(`Markér ${finding.destination_url} som virkende?\n\nLinket tjekkes stadig. Svarer det senere anderledes end nu, bliver det vist som et problem igen.`)) return;
+      await api('/api/ignore', {
+        method: 'POST',
+        body: JSON.stringify({ site_id: finding.site_id, destination_url: finding.destination_url, source_url: '', kind: 'ok', finding_id: finding.id })
+      });
+      await Promise.all([openResults(state.selectedScan.id), loadBase()]);
+      toast('Linket er markeret som virkende');
+    }
     if (action.dataset.action === 'unignore') {
       await api(`/api/ignore/${action.dataset.rule}`, { method: 'DELETE' });
-      await openResults(state.selectedScan.id);
-      toast('Linket overvåges igen');
+      await Promise.all([openResults(state.selectedScan.id), loadBase()]);
+      toast(action.dataset.kind === 'ok' ? 'Godkendelsen er fjernet, og linket overvåges igen' : 'Linket overvåges igen');
     }
     if (action.dataset.action === 'undo-change') {
       if (!window.confirm('Gendan sidens indhold fra backupen før linkrettelsen?')) return;
@@ -784,7 +833,7 @@ $('#ignore-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/ignore', { method: 'POST', body: JSON.stringify(data) });
     $('#ignore-dialog').close();
-    await openResults(state.selectedScan.id);
+    await Promise.all([openResults(state.selectedScan.id), loadBase()]);
     toast('Linket ignoreres fremover');
   } catch (error) { toast(error.message, 'error'); }
 });
@@ -833,6 +882,7 @@ $('#disconnect-wordpress').addEventListener('click', async () => {
 });
 
 $('#repair-form').addEventListener('input', resetRepairPreview);
+$$('#repair-form input[name="repair_mode"]').forEach((input) => input.addEventListener('change', syncRepairMode));
 $('#repair-form').elements.source_url.addEventListener('change', () => {
   syncRepairAnchorText();
   resetRepairPreview();
@@ -845,13 +895,16 @@ $('#preview-repair').addEventListener('click', async () => {
   try {
     const preview = await api('/api/wordpress/preview', { method: 'POST', body: JSON.stringify(data) });
     form.elements.before_hash.value = preview.before_hash;
+    const summary = preview.unlink
+      ? `${preview.replacement_count} link${preview.replacement_count === 1 ? '' : 's'} fjernes. Ankerteksten “${escapeHtml(preview.old_anchor_text || '')}” bliver stående som almindelig tekst.`
+      : null;
     const urlSummary = preview.url_changed
       ? `${preview.replacement_count} linkadresse${preview.replacement_count === 1 ? '' : 'r'} ændres.`
       : 'Linkadressen beholdes.';
     const anchorSummary = preview.anchor_text_changed
       ? `${preview.anchor_replacement_count} ankertekst${preview.anchor_replacement_count === 1 ? '' : 'er'} ændres.`
       : 'Ankerteksten beholdes.';
-    $('#repair-preview').innerHTML = `<strong>${escapeHtml(preview.post_title)}</strong><span>${urlSummary} ${anchorSummary}</span><small>Resten af indholdet skal være identisk efter lagring.</small>`;
+    $('#repair-preview').innerHTML = `<strong>${escapeHtml(preview.post_title)}</strong><span>${summary || `${urlSummary} ${anchorSummary}`}</span><small>Resten af indholdet skal være identisk efter lagring.</small>`;
     $('#repair-preview').hidden = false;
     $('#apply-repair').disabled = false;
   } catch (error) { resetRepairPreview(); toast(error.message, 'error'); }
@@ -868,7 +921,9 @@ $('#repair-form').addEventListener('submit', async (event) => {
     $('#repair-dialog').close();
     if (state.selectedScan) await openResults(state.selectedScan.id);
     const anchorMessage = result.anchor_replacement_count ? ` og ${result.anchor_replacement_count} ankertekst${result.anchor_replacement_count === 1 ? '' : 'er'}` : '';
-    toast(`${result.replacement_count} link${result.replacement_count === 1 ? '' : 's'}${anchorMessage} blev rettet og verificeret`);
+    toast(result.unlink
+      ? `${result.replacement_count} link${result.replacement_count === 1 ? '' : 's'} blev fjernet, og teksten er bevaret`
+      : `${result.replacement_count} link${result.replacement_count === 1 ? '' : 's'}${anchorMessage} blev rettet og verificeret`);
   } catch (error) { resetRepairPreview(); toast(error.message, 'error'); }
 });
 

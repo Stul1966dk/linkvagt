@@ -83,6 +83,10 @@ tbody tr:hover { background: #fbfcfb; }
 .badge.broken, .badge.failed { color: var(--red); background: var(--red-soft); }
 .badge.redirect, .badge.running { color: var(--blue); background: var(--blue-soft); }
 .badge.warning, .badge.queued { color: var(--amber); background: var(--amber-soft); }
+.badge.ignored { color: var(--muted); background: #eef1ef; }
+.badge + small { display: block; color: var(--muted); font-size: 10px; margin-top: 4px; }
+.source-override { display: block; color: var(--muted); }
+.source-override .text-button { font-size: inherit; padding: 0; }
 .issue-counts { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
 .issue { font-size: 11px; font-weight: 750; }
 .issue.red { color: var(--red); }.issue.blue { color: var(--blue); }.issue.amber { color: var(--amber); }
@@ -226,6 +230,7 @@ dialog > form > label { margin-top: 17px; }
 .repair-preview strong, .repair-preview span, .repair-preview small { display: block; }
 .repair-preview strong { margin-bottom: 5px; }.repair-preview span { font-size: 12px; }.repair-preview small { color: var(--muted); margin-top: 6px; }
 .repair-text-fields { margin-top: 17px; }
+.repair-mode { margin-top: 17px; }
 .redirect-kind { display: inline-flex; color: var(--blue); background: var(--blue-soft); border-radius: 4px; padding: 2px 5px; margin: 4px 5px 0 0; font-size: 10px; font-weight: 750; }
 .button:disabled { cursor: not-allowed; opacity: .48; }
 .empty { text-align: center; padding: 42px 20px; color: var(--muted); }.empty strong { display: block; color: var(--ink); margin-bottom: 6px; }

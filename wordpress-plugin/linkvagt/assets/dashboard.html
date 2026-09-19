@@ -120,7 +120,7 @@
                 <div><dt>Næste kørsel</dt><dd id="schedule-next">Henter…</dd></div>
                 <div><dt>Status</dt><dd id="schedule-status">Aktiv</dd></div>
               </dl>
-              <p class="dialog-note">Kun ét website scannes ad gangen. Manuelle scanninger er fortsat mulige og rapporteres separat.</p>
+              <p class="dialog-note">Kun ét website scannes ad gangen. Manuelle scanninger er fortsat mulige, men sender ingen mail.</p>
               <label>Dedikeret LinkVagt-cronadresse
                 <input id="worker-url" type="text" readonly autocomplete="off">
                 <small>Opret denne adresse som et ekstra cronjob hvert minut hos Simply. Adressen indeholder en sikkerhedskode og bør ikke deles.</small>
@@ -153,9 +153,9 @@
             </form>
           </div>
           <div class="settings-layout">
-            <div class="settings-copy"><h2>Mailrapporter</h2><p>Send en rapport efter scanninger via WordPress og sitets eksisterende SMTP-opsætning.</p></div>
+            <div class="settings-copy"><h2>Mailrapporter</h2><p>Send en samlet rapport efter de automatiske scanninger via WordPress og sitets eksisterende SMTP-opsætning. Manuelle scanninger sender ingen mail.</p></div>
             <form class="settings-form" id="mail-form">
-              <label class="toggle-row"><span><strong>Aktivér mailrapporter</strong><small>Send rapport efter afsluttede scanninger</small></span><input type="checkbox" name="mail_enabled" role="switch"></label>
+              <label class="toggle-row"><span><strong>Aktivér mailrapporter</strong><small>Send rapport, når de automatiske scanninger er færdige</small></span><input type="checkbox" name="mail_enabled" role="switch"></label>
               <label class="toggle-row"><span><strong>Send også rene rapporter</strong><small>Modtag mail, selv når der ikke findes problemer</small></span><input type="checkbox" name="mail_include_clean" role="switch"></label>
               <div class="form-grid"><label>Standardmodtager<input type="email" name="mail_to" placeholder="dig@firma.dk"></label><label>Afsenderadresse<input type="email" name="mail_from" placeholder="linkvagt@firma.dk"><small>Valgfri. Lad WordPress/SMTP-pluginet vælge afsenderen, hvis feltet er tomt.</small></label></div>
               <div class="form-actions"><button type="button" class="button secondary" id="test-mail">Send testmail</button><button class="button primary">Gem indstillinger</button></div>
@@ -310,9 +310,11 @@
       <div class="dialog-head"><div><p class="eyebrow">SIKKER LINKRETTELSE</p><h2>Ret link i WordPress</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
       <input type="hidden" name="finding_id"><input type="hidden" name="before_hash">
       <label>Kildeside<select name="source_url" required></select></label>
+      <fieldset class="segmented repair-mode"><legend>Handling</legend><label><input type="radio" name="repair_mode" value="replace" checked><span>Ret link</span></label><label><input type="radio" name="repair_mode" value="unlink"><span>Fjern link, behold teksten</span></label></fieldset>
       <label>Nuværende link<input name="old_url" readonly></label>
-      <label>Nyt link<input name="new_url" type="url" required placeholder="https://example.dk/ny-side"></label>
-      <div class="form-grid repair-text-fields"><label>Nuværende ankertekst<input name="old_anchor_text" readonly></label><label>Ny ankertekst<input name="new_anchor_text" maxlength="500" placeholder="Lad teksten stå uændret"></label></div>
+      <label data-repair-replace>Nyt link<input name="new_url" type="url" required placeholder="https://example.dk/ny-side"></label>
+      <div class="form-grid repair-text-fields"><label>Nuværende ankertekst<input name="old_anchor_text" readonly></label><label data-repair-replace>Ny ankertekst<input name="new_anchor_text" maxlength="500" placeholder="Lad teksten stå uændret"></label></div>
+      <p class="dialog-note" data-repair-unlink hidden>Linket fjernes fra siden. Ankerteksten bliver stående som almindelig tekst, så resten af teksten er uændret.</p>
       <div class="repair-preview" id="repair-preview" hidden></div>
       <div class="dialog-actions"><button type="button" class="button ghost" data-close-dialog>Annuller</button><button type="button" class="button secondary" id="preview-repair">Kontroller ændring</button><button type="submit" class="button primary" id="apply-repair" disabled>Godkend og ret</button></div>
     </form>

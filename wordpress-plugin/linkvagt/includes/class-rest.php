@@ -478,16 +478,8 @@ final class Rest
         }
 
         $site_id = (int) $rows[0]['site_id'];
-        $rules_table = Schema::table('ignore_rules');
-        $rule_rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM {$rules_table}
-             WHERE site_id=%d AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP()) ORDER BY id",
-            $site_id
-        ), ARRAY_A) ?: [];
-        $rules_by_destination = [];
-        foreach ($rule_rows as $rule_row) {
-            $rules_by_destination[(string) $rule_row['destination_hash']][] = $rule_row;
-        }
+        $rules_by_destination = Link_Rules::for_site($site_id, true);
+        $stale = [];
 
         foreach ($rows as &$row) {
             foreach (['id', 'scan_id', 'site_id', 'status_code', 'attempt_count'] as $field) {
@@ -496,21 +488,28 @@ final class Rest
             $row['redirect_chain'] = json_decode((string) ($row['redirect_chain'] ?? '[]'), true) ?: [];
             $row['sources'] = $sources_by_finding[(int) $row['id']] ?? [];
 
-            $rules = $rules_by_destination[hash('sha256', (string) $row['destination_url'])] ?? [];
-            $matched = null;
-            foreach ($rules as $rule) {
-                if ($rule['source_url'] === '' || array_filter(
-                    $row['sources'],
-                    static fn (array $source): bool => hash_equals((string) $rule['source_hash'], hash('sha256', (string) $source['source_url']))
-                )) {
-                    $matched = $rule;
-                    break;
-                }
+            // Reglerne vurderes igen ved visning, så en udløbet regel ikke
+            // bliver hængende. Afviger den gemte vurdering, rettes den, og
+            // scanningens tællere genberegnes nedenfor.
+            $rules = Link_Rules::evaluate($rules_by_destination, $row, $row['sources']);
+            if (($row['override'] ?? null) !== $rules['override']
+                || (int) ($row['override_rule_id'] ?? 0) !== (int) ($rules['override'] ? $rules['rule_id'] : 0)) {
+                $stale[] = $row['id'];
             }
-            $row['ignored'] = (bool) $matched;
-            $row['ignore_rule_id'] = $matched ? (int) $matched['id'] : null;
+            $row['override'] = $rules['override'];
+            $row['override_rule_id'] = $rules['override'] ? $rules['rule_id'] : null;
+            $row['ignored'] = $rules['override'] === 'ignored';
+            foreach ($row['sources'] as &$source) {
+                $source_rule = $rules['source_rules'][hash('sha256', (string) $source['source_url'])] ?? null;
+                $source['override'] = $source_rule ? ((string) $source_rule['kind'] === 'ok' ? 'ok' : 'ignored') : null;
+                $source['override_rule_id'] = $source_rule ? (int) $source_rule['id'] : null;
+            }
+            unset($source);
         }
         unset($row);
+        if ($stale) {
+            Link_Rules::refresh_findings($stale);
+        }
 
         return $rows;
     }
@@ -598,29 +597,54 @@ final class Rest
         }
         $expires = sanitize_text_field((string) $request->get_param('expires_at'));
         $expires_at = $expires !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $expires) ? $expires . ' 23:59:59' : null;
+        $kind = in_array((string) $request->get_param('kind'), Link_Rules::KINDS, true) ? (string) $request->get_param('kind') : 'ignore';
         global $wpdb;
         $table = Schema::table('ignore_rules');
+        // En godkendelse gælder kun det svar, der blev godkendt.
+        $expected_signature = null;
+        if ($kind === 'ok') {
+            $finding = $wpdb->get_row($wpdb->prepare(
+                'SELECT status_code,error_type,category FROM ' . Schema::table('findings') . ' WHERE id=%d AND site_id=%d',
+                absint($request->get_param('finding_id')),
+                $site_id
+            ), ARRAY_A);
+            if (!$finding || $finding['category'] === 'ok') {
+                return new WP_Error('linkvagt_invalid_ignore', 'Linkfundet findes ikke.', ['status' => 400]);
+            }
+            $expected_signature = Link_Rules::signature($finding);
+        }
         $data = [
             'site_id' => $site_id,
             'destination_hash' => hash('sha256', $destination),
             'destination_url' => $destination,
             'source_hash' => hash('sha256', $source),
             'source_url' => $source,
+            'kind' => $kind,
+            'expected_signature' => $expected_signature,
             'reason' => sanitize_textarea_field((string) $request->get_param('reason')),
             'expires_at' => $expires_at,
             'created_by' => get_current_user_id(),
             'created_at' => current_time('mysql', true),
         ];
         $wpdb->replace($table, $data);
-        $this->audit('ignore.created', 'ignore', (int) $wpdb->insert_id);
-        return ['id' => (int) $wpdb->insert_id];
+        $rule_id = (int) $wpdb->insert_id;
+        Link_Rules::apply_to_destination($site_id, $destination);
+        $this->audit($kind === 'ok' ? 'ignore.marked_ok' : 'ignore.created', 'ignore', $rule_id);
+        return ['id' => $rule_id, 'kind' => $kind];
     }
 
     public function delete_ignore(WP_REST_Request $request): WP_REST_Response|WP_Error
     {
         global $wpdb;
         $id = (int) $request['id'];
+        $rule = $wpdb->get_row($wpdb->prepare(
+            'SELECT site_id,destination_url FROM ' . Schema::table('ignore_rules') . ' WHERE id=%d',
+            $id
+        ), ARRAY_A);
         $deleted = $wpdb->delete(Schema::table('ignore_rules'), ['id' => $id]);
+        if ($deleted && $rule) {
+            Link_Rules::apply_to_destination((int) $rule['site_id'], (string) $rule['destination_url']);
+        }
         if (!$deleted) {
             return new WP_Error('linkvagt_ignore_not_found', 'Ignoreringsreglen findes ikke.', ['status' => 404]);
         }

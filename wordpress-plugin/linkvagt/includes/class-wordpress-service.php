@@ -175,8 +175,8 @@ final class WordPress_Service
                 if ($prepared['url_changed']) {
                     $this->mark_source_resolved($change_id, $prepared['finding'], $prepared['source']);
                 }
-                $this->audit('wordpress.change_applied', 'change', $change_id);
-                return ['id' => $change_id, 'status' => 'applied', 'replacement_count' => $prepared['replacement']['count'], 'anchor_replacement_count' => $prepared['replacement']['anchor_count']];
+                $this->audit($prepared['unlink'] ? 'wordpress.link_removed' : 'wordpress.change_applied', 'change', $change_id);
+                return ['id' => $change_id, 'status' => 'applied', 'unlink' => $prepared['unlink'], 'replacement_count' => $prepared['replacement']['count'], 'anchor_replacement_count' => $prepared['replacement']['anchor_count']];
             } catch (\Throwable $write_error) {
                 try {
                     $prepared['client']->update_content($prepared['post']['post_type'], (int) $prepared['post']['id'], $prepared['original']);
@@ -231,7 +231,7 @@ final class WordPress_Service
             'replacement_count' => $prepared['replacement']['count'], 'old_anchor_text' => $prepared['source']['link_text'],
             'new_anchor_text' => $prepared['new_anchor_text'], 'anchor_text_changed' => $prepared['anchor_changed'],
             'anchor_replacement_count' => $prepared['replacement']['anchor_count'], 'url_changed' => $prepared['url_changed'],
-            'before_hash' => hash('sha256', $prepared['original']),
+            'unlink' => $prepared['unlink'], 'before_hash' => hash('sha256', $prepared['original']),
         ];
     }
 
@@ -248,36 +248,53 @@ final class WordPress_Service
         $client = $this->client((int) $finding['site_id']);
         $post = $client->find_post($source_url);
         $original = $this->raw_content($post);
-        $new_url = esc_url_raw((string) $request->get_param('new_url'), ['http', 'https']);
-        if (!wp_http_validate_url($new_url)) {
-            throw new \RuntimeException('Den nye linkadresse er ugyldig.');
-        }
-        $new_anchor = sanitize_text_field((string) $request->get_param('new_anchor_text'));
         $old_anchor = (string) ($source['link_text'] ?? '');
-        $anchor_changed = $new_anchor !== '' && $new_anchor !== $old_anchor;
-        $url_changed = $this->normalize($new_url, $post['link']) !== $this->normalize($finding['destination_url'], $post['link']);
-        if (!$url_changed && !$anchor_changed) {
-            throw new \RuntimeException('Hverken link eller ankertekst er ændret.');
+        // "unlink" fjerner selve <a>-elementet og lader ankerteksten stå som
+        // almindelig tekst. Ændringen gemmes med tom new_url.
+        $unlink = $request->get_param('repair_mode') === 'unlink';
+        if ($unlink) {
+            $new_url = '';
+            $new_anchor = '';
+            $anchor_changed = false;
+            $url_changed = true;
+        } else {
+            $new_url = esc_url_raw((string) $request->get_param('new_url'), ['http', 'https']);
+            if (!wp_http_validate_url($new_url)) {
+                throw new \RuntimeException('Den nye linkadresse er ugyldig.');
+            }
+            $new_anchor = sanitize_text_field((string) $request->get_param('new_anchor_text'));
+            $anchor_changed = $new_anchor !== '' && $new_anchor !== $old_anchor;
+            $url_changed = $this->normalize($new_url, $post['link']) !== $this->normalize($finding['destination_url'], $post['link']);
+            if (!$url_changed && !$anchor_changed) {
+                throw new \RuntimeException('Hverken link eller ankertekst er ændret.');
+            }
         }
-        $replacement = $this->replace_anchors($original, $finding['destination_url'], $new_url, $anchor_changed ? $new_anchor : null, $post['link']);
+        $replacement = $this->replace_anchors($original, $finding['destination_url'], $unlink ? null : $new_url, $anchor_changed ? $new_anchor : null, $post['link']);
         if (!$replacement['count']) {
             throw new \RuntimeException('Linket findes ikke i WordPress-sidens almindelige indhold.');
+        }
+        if ($replacement['buttons']) {
+            throw new \RuntimeException('Linket er en knap. Fjern knappen i WordPress-editoren, så blokken ikke går i stykker.');
         }
         if ($replacement['formatted']) {
             throw new \RuntimeException('Ankerteksten indeholder formatering og kan ikke ændres sikkert automatisk.');
         }
-        return compact('finding', 'source', 'client', 'post', 'original', 'new_url', 'new_anchor', 'anchor_changed', 'url_changed') + [
+        return compact('finding', 'source', 'client', 'post', 'original', 'new_url', 'new_anchor', 'anchor_changed', 'url_changed', 'unlink') + [
             'new_anchor_text' => $anchor_changed ? $new_anchor : $old_anchor,
             'replacement' => $replacement,
             'title' => (string) ($post['title']['raw'] ?? $post['title']['rendered'] ?? $post['link']),
         ];
     }
 
-    private function replace_anchors(string $html, string $old_url, string $new_url, ?string $new_text, string $base): array
+    /**
+     * Retter alle <a>-elementer, der peger på $old_url. Med $new_url = null
+     * fjernes linket, og det indre indhold bevares uændret.
+     */
+    private function replace_anchors(string $html, string $old_url, ?string $new_url, ?string $new_text, string $base): array
     {
-        $count = $anchor_count = $formatted = 0;
+        $count = $anchor_count = $formatted = $buttons = 0;
         $target = $this->normalize($old_url, $base);
-        $content = preg_replace_callback('~(<a\b)([^>]*)(>)(.*?)(</a\s*>)~is', function (array $m) use ($target, $new_url, $new_text, $base, &$count, &$anchor_count, &$formatted): string {
+        $content = preg_replace_callback('~(<a\b)([^>]*)(>)(.*?)(</a\s*>)~is', function (array $m) use ($target, $new_url, $new_text, $base, &$count, &$anchor_count, &$formatted, &$buttons): string {
             if (!preg_match('~(\bhref\s*=\s*)(["\'])(.*?)\2~is', $m[2], $href)) {
                 return $m[0];
             }
@@ -285,6 +302,14 @@ final class WordPress_Service
                 return $m[0];
             }
             ++$count;
+            if ($new_url === null) {
+                // En knapblok uden <a> er ugyldig blokmarkup i Gutenberg.
+                if (preg_match('~\bwp-block-button__link\b|\bwp-element-button\b~i', $m[2])) {
+                    ++$buttons;
+                    return $m[0];
+                }
+                return $m[4];
+            }
             $attributes = str_replace($href[0], $href[1] . $href[2] . esc_attr($new_url) . $href[2], $m[2]);
             $inner = $m[4];
             if ($new_text !== null) {
@@ -297,7 +322,7 @@ final class WordPress_Service
             }
             return $m[1] . $attributes . $m[3] . $inner . $m[5];
         }, $html);
-        return ['content' => (string) $content, 'count' => $count, 'anchor_count' => $anchor_count, 'formatted' => $formatted];
+        return ['content' => (string) $content, 'count' => $count, 'anchor_count' => $anchor_count, 'formatted' => $formatted, 'buttons' => $buttons];
     }
 
     private function client(int $site_id, bool $verified = true): WordPress_Client
@@ -358,21 +383,12 @@ final class WordPress_Service
             (int) $finding['id']
         ));
         if ($remaining > 0) {
+            // De resterende kildesider kan alle være ignoreret.
+            Link_Rules::refresh_findings([(int) $finding['id']]);
             return;
         }
         $wpdb->update(Schema::table('findings'), ['resolved_at' => current_time('mysql', true)], ['id' => (int) $finding['id']]);
-        $column = match ($finding['category']) {
-            'broken' => 'broken_count',
-            'redirect' => 'redirect_count',
-            'warning' => 'warning_count',
-            default => null,
-        };
-        if ($column) {
-            $wpdb->query($wpdb->prepare(
-                'UPDATE ' . Schema::table('scans') . " SET {$column}=GREATEST(0,{$column}-1) WHERE id=%d",
-                (int) $finding['scan_id']
-            ));
-        }
+        Link_Rules::recount_scan((int) $finding['scan_id']);
         $wpdb->update(Schema::table('link_changes'), ['error_message' => null], ['id' => $change_id]);
     }
 
@@ -396,22 +412,11 @@ final class WordPress_Service
             'source_url' => (string) $change['source_url'],
             'link_text' => (string) ($change['source_link_text'] ?? ''),
         ]);
-        if (!$finding['resolved_at']) {
-            return;
+        if ($finding['resolved_at']) {
+            $wpdb->update($findings, ['resolved_at' => null], ['id' => (int) $change['finding_id']]);
         }
-        $wpdb->update($findings, ['resolved_at' => null], ['id' => (int) $change['finding_id']]);
-        $column = match ($finding['category']) {
-            'broken' => 'broken_count',
-            'redirect' => 'redirect_count',
-            'warning' => 'warning_count',
-            default => null,
-        };
-        if ($column) {
-            $wpdb->query($wpdb->prepare(
-                'UPDATE ' . Schema::table('scans') . " SET {$column}={$column}+1 WHERE id=%d",
-                (int) $finding['scan_id']
-            ));
-        }
+        Link_Rules::refresh_findings([(int) $change['finding_id']]);
+        Link_Rules::recount_scan((int) $finding['scan_id']);
     }
 }
 

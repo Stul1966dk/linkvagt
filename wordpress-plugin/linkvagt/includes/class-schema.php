@@ -6,7 +6,7 @@ namespace LinkVagt;
 
 final class Schema
 {
-    public const VERSION = '7';
+    public const VERSION = '8';
 
     public static function table(string $name): string
     {
@@ -105,6 +105,8 @@ final class Schema
             redirect_chain longtext NULL,
             attempt_count tinyint unsigned NOT NULL DEFAULT 1,
             verification_status varchar(20) NOT NULL DEFAULT 'single',
+            override varchar(20) NULL,
+            override_rule_id bigint unsigned NULL,
             resolved_at datetime NULL,
             first_seen_at datetime NOT NULL,
             last_seen_at datetime NOT NULL,
@@ -128,6 +130,8 @@ final class Schema
             destination_url text NOT NULL,
             source_hash char(64) NOT NULL,
             source_url text NOT NULL,
+            kind varchar(20) NOT NULL DEFAULT 'ignore',
+            expected_signature varchar(80) NULL,
             reason text NULL,
             expires_at datetime NULL,
             created_by bigint unsigned NULL,
@@ -282,6 +286,22 @@ final class Schema
         ) {$charset};");
 
         self::migrate_members_to_wordpress_provider();
+        self::backfill_link_overrides();
+    }
+
+    /**
+     * Skema v8 gemmer ignoreringer på fundene, så tællerne kan udelade dem.
+     * Fund fra før v8 vurderes én gang her. Idempotent.
+     */
+    private static function backfill_link_overrides(): void
+    {
+        if ((int) get_option('linkvagt_schema_version') >= 8) {
+            return;
+        }
+        global $wpdb;
+        foreach ($wpdb->get_col('SELECT DISTINCT site_id FROM ' . self::table('ignore_rules')) ?: [] as $site_id) {
+            Link_Rules::apply_to_site((int) $site_id);
+        }
     }
 
     /**

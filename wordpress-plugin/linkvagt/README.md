@@ -49,10 +49,23 @@ WordPress' tidszone. Ugedag og klokkeslæt kan ændres under LinkVagts
 indstillinger. På hvert website kan automatisk scanning sættes til ugentligt,
 hver 14. dag, månedligt eller deaktiveres, så websitet kun scannes manuelt.
 Websites scannes sekventielt, og der sendes én samlet mail, når hele batchen er
-færdig. Manuelle scanninger rapporteres fortsat separat.
+færdig. Manuelle scanninger sender ingen mail.
 
 På Simply.com bør `wp-cron.php` fortsat kaldes af et rigtigt cronjob for
 WordPress' øvrige planlagte opgaver. LinkVagts dedikerede worker-URL, som vises
 under indstillinger, skal desuden kaldes hvert minut. Deaktiver kun WordPress'
 besøgsudløste cron med `DISABLE_WP_CRON`, når det almindelige eksterne cronjob
 er oprettet og kontrolleret.
+
+## Ignorerede og godkendte links
+
+- **Ignorer**: linket er et kendt problem. Det kan gælde hele hjemmesiden eller
+  én kildeside. En regel for én kildeside tilsidesætter kun fundet, når alle
+  sider med linket er dækket.
+- **Virker**: linket virker, men LinkVagt kan ikke se det, fx fordi serveren
+  mangler et mellemliggende certifikat (cURL error 60). Godkendelsen gælder
+  kun det svar, der blev godkendt. Svarer linket senere anderledes, vises det
+  igen som et problem.
+
+Tilsidesatte links gemmes stadig ved hver scanning, men tæller ikke med i
+problemtal, oversigt eller mails.

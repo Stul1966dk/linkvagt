@@ -94,7 +94,6 @@ final class Scanner
     public function run_fallback_tick(): void
     {
         Scheduler::instance()->run_due_schedule();
-        Reporter::instance()->send_pending_manual_report();
         $this->purge_excluded_queued_links();
     }
 
@@ -119,7 +118,6 @@ final class Scanner
     public function external_tick(): array
     {
         Scheduler::instance()->run_due_schedule();
-        Reporter::instance()->send_pending_manual_report();
         $excluded_removed = $this->purge_excluded_queued_links();
         $this->process_next('external');
 
@@ -686,6 +684,7 @@ final class Scanner
             'last_seen_at' => $now,
         ]);
         $finding_id = (int) $wpdb->insert_id;
+        $stored_sources = [];
         foreach (json_decode((string) $link['sources'], true) ?: [] as $source) {
             $source_url = (string) ($source['source_url'] ?? '');
             $wpdb->insert(Schema::table('finding_sources'), [
@@ -694,6 +693,21 @@ final class Scanner
                 'source_url' => $source_url,
                 'link_text' => (string) ($source['link_text'] ?? ''),
             ]);
+            $stored_sources[] = ['source_url' => $source_url];
+        }
+        // Ignorerede og manuelt godkendte links gemmes som fund, men tæller
+        // ikke med som problemer.
+        $finding = [
+            'id' => $finding_id,
+            'destination_url' => (string) $link['destination_url'],
+            'category' => (string) $result['category'],
+            'status_code' => $result['status_code'] ?? null,
+            'error_type' => $result['error_type'] ?? null,
+        ];
+        $rules = Link_Rules::evaluate(Link_Rules::for_site((int) $scan['site_id']), $finding, $stored_sources);
+        if ($rules['override']) {
+            Link_Rules::store($finding, $rules);
+            return;
         }
         $column = match ($result['category']) {
             'broken' => 'broken_count',
