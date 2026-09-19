@@ -14,7 +14,9 @@
       <nav aria-label="Primær navigation">
         <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span>Overblik</button>
         <button class="nav-item" data-view="sites"><span class="nav-icon">◎</span>Hjemmesider</button>
+        <button class="nav-item" data-view="site"><span class="nav-icon">◧</span>Arbejd på site</button>
         <button class="nav-item" data-view="scans"><span class="nav-icon">↻</span>Scanninger</button>
+        <button class="nav-item" data-view="plan"><span class="nav-icon">▦</span>Planlægning</button>
         <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Indstillinger</button>
         <button class="nav-item" data-view="support"><span class="nav-icon">?</span>Support</button>
       </nav>
@@ -55,7 +57,7 @@
         <div class="metric-grid" id="metrics"></div>
         <div class="section-heading"><div><h2>Hjemmesider</h2><p>Seneste kontrol på tværs af alle websites</p></div><button class="text-button" data-go="sites">Se alle</button></div>
         <div class="table-wrap"><table><thead><tr><th>Hjemmeside</th><th>Status</th><th>Problemer</th><th>Seneste scanning</th><th></th></tr></thead><tbody id="overview-sites"></tbody></table></div>
-        <div class="section-heading lower"><div><h2>Seneste aktivitet</h2><p>Manuelt startede scanninger</p></div></div>
+        <div class="section-heading lower"><div><h2>Seneste aktivitet</h2><p>De seneste scanninger på tværs af websites</p></div></div>
         <div class="activity-list" id="recent-activity"></div>
       </section>
 
@@ -71,7 +73,8 @@
 
       <section class="view" id="view-results">
         <button class="back-button" id="results-back">← Tilbage</button>
-        <div class="result-header"><div><p class="eyebrow" id="result-site-name"></p><h2 id="result-heading">Scanningsresultat</h2><p id="result-meta"></p></div><a class="button secondary" id="csv-link" href="#">↓ Eksportér CSV</a></div>
+        <div class="result-header"><div><p class="eyebrow" id="result-site-name"></p><h2 id="result-heading">Scanningsresultat</h2><p id="result-meta"></p></div><button type="button" class="button secondary" id="results-workspace">Arbejd på dette site</button></div>
+        <div id="results-body">
         <div class="result-tabs" role="tablist">
           <button class="active" data-category="all">Alle <span id="count-all">0</span></button>
           <button data-category="broken">Døde <span id="count-broken">0</span></button>
@@ -79,7 +82,7 @@
           <button data-category="warning">Advarsler <span id="count-warning">0</span></button>
           <button data-category="ok">Fungerer <span id="count-ok">0</span></button>
         </div>
-        <div class="toolbar results-toolbar"><label class="search"><span>⌕</span><input id="finding-search" type="search" placeholder="Søg i links"></label><label class="checkbox"><input id="show-ignored" type="checkbox"> Vis ignorerede</label></div>
+        <div class="toolbar results-toolbar"><label class="search"><span>⌕</span><input id="finding-search" type="search" placeholder="Søg i links"></label><div class="toolbar-end"><label class="checkbox"><input id="show-ignored" type="checkbox"> Vis ignorerede</label><a class="button secondary" id="csv-link" href="#">↓ Eksportér CSV</a></div></div>
         <section class="status-guide" aria-labelledby="status-guide-heading">
           <div class="status-guide-heading"><h3 id="status-guide-heading">Hvad betyder statuskoderne?</h3><p>Koden er svaret fra den server, linket peger på.</p></div>
           <dl class="status-code-list">
@@ -94,6 +97,52 @@
           </dl>
         </section>
         <div class="table-wrap"><table><thead><tr><th data-sort-column="category"><button class="sort-button active" data-finding-sort="category">Status <span aria-hidden="true">↑</span></button></th><th data-sort-column="destination"><button class="sort-button" data-finding-sort="destination">Destination <span aria-hidden="true">↕</span></button></th><th data-sort-column="source"><button class="sort-button" data-finding-sort="source">Fundet på <span aria-hidden="true">↕</span></button></th><th data-sort-column="firstSeen"><button class="sort-button" data-finding-sort="firstSeen">Først set <span aria-hidden="true">↕</span></button></th><th></th></tr></thead><tbody id="findings-table"></tbody></table></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-plan">
+        <div class="result-header plan-head">
+          <div><h2>Automatiske scanninger</h2><p id="plan-intro">Henter planen…</p></div>
+          <div class="workspace-actions"><button type="button" class="button secondary" id="plan-undo" hidden>Fortryd fordeling</button><button type="button" class="button primary" id="plan-spread">Fordel jævnt</button></div>
+        </div>
+        <div class="plan-legend"><span><i class="plan-sample"></i>Næste scanning · træk for at flytte, klik for at redigere</span><span><i class="plan-sample repeat"></i>Senere gentagelse</span><span><i class="plan-sample load"></i>Belastning i links</span><span><i class="plan-sample busy"></i>Flere websites samme dag</span></div>
+        <div class="plan-scroll"><div class="plan-calendar" id="plan-calendar"></div></div>
+        <p class="workspace-caption plan-footnote" id="plan-footnote"></p>
+      </section>
+
+      <section class="view" id="view-site">
+        <div class="toolbar workspace-picker">
+          <label class="workspace-select">Hjemmeside<select id="workspace-site" aria-label="Vælg hjemmeside"><option value="">Vælg en hjemmeside…</option></select></label>
+        </div>
+        <div class="empty workspace-empty" id="workspace-empty"><strong>Vælg en hjemmeside</strong>Arbejd med ét website ad gangen: scan, ret links og følg resultaterne uden de andre websites i vejen.</div>
+        <div id="workspace" hidden>
+          <div class="result-header workspace-head">
+            <div><p class="eyebrow" id="workspace-host"></p><h2 id="workspace-name"></h2><p id="workspace-meta"></p></div>
+            <div class="workspace-actions">
+              <button type="button" class="button primary" data-workspace-action="scan-site">↻ Scan hele sitet</button>
+              <button type="button" class="button secondary" data-workspace-action="scan-target">Scan side eller link</button>
+              <button type="button" class="button secondary" data-workspace-action="wordpress" id="workspace-wordpress">WordPress</button>
+              <button type="button" class="button secondary" data-workspace-action="edit">Rediger</button>
+            </div>
+          </div>
+          <div class="workspace-progress" id="workspace-progress" hidden></div>
+          <div class="metric-grid" id="workspace-metrics"></div>
+          <div class="result-tabs workspace-tabs" role="tablist">
+            <button class="active" data-workspace-tab="results">Resultater</button>
+            <button data-workspace-tab="scans">Scanninger <span id="workspace-scan-count">0</span></button>
+            <button data-workspace-tab="changes">Linkrettelser</button>
+          </div>
+          <div class="workspace-panel" id="workspace-panel-results">
+            <p class="workspace-caption" id="workspace-result-caption"></p>
+            <div id="workspace-results"></div>
+          </div>
+          <div class="workspace-panel" id="workspace-panel-scans" hidden>
+            <div class="table-wrap"><table><thead><tr><th>Start</th><th>Type</th><th>Status</th><th>Links</th><th>Resultat</th><th></th></tr></thead><tbody id="workspace-scans"></tbody></table></div>
+          </div>
+          <div class="workspace-panel" id="workspace-panel-changes" hidden>
+            <div class="change-history workspace-history" id="workspace-changes"></div>
+          </div>
+        </div>
       </section>
 
       <section class="view" id="view-settings">
@@ -182,6 +231,7 @@
               <h2>Kom godt i gang</h2>
               <p>Tilføj et website under Hjemmesider. LinkVagt forsøger først at bruge de angivne sitemaps og kan ellers følge interne links på websitet. Start derefter kontrollen med cirkelpilen ud for websitet.</p>
               <ol><li>Tilføj webadressen og eventuelle sitemap-adresser.</li><li>Start en manuel scanning af hele websitet, en enkeltside eller et enkelt link.</li><li>Åbn resultatet og gennemgå døde links, redirects og advarsler.</li></ol>
+              <p>Har du mange websites, så brug <strong>Arbejd på site</strong>. Her vælger du ét website og har scanninger, resultater og linkrettelser samlet uden de andre websites i vejen.</p>
             </section>
             <section id="support-scanning">
               <p class="eyebrow">KONTROL</p>
@@ -189,6 +239,7 @@
               <p><strong>Hele websitet</strong> opdaterer det komplette resultat. <strong>Enkeltside</strong> kontrollerer alle links på én side. <strong>Enkelt link</strong> er den hurtigste kontrol efter en rettelse.</p>
               <p>Links på globalt ekskluderede domæner springes over. En fejl kontrolleres igen, før den gemmes, for at reducere midlertidige netværksfejl.</p>
               <p>Tidspunktet for den automatiske ugekontrol vælges under Indstillinger. LinkVagt scanner ét website ad gangen. Når hele køen er færdig, sendes én samlet rapportmail.</p>
+              <p>Under <strong>Planlægning</strong> ser du, hvilke websites der scannes hvilke dage de næste fire uger, og hvor mange links hver dag skal kontrollere. Træk et website til en anden dag, eller brug <strong>Fordel jævnt</strong> for at sprede belastningen automatisk.</p>
             </section>
             <section id="support-results">
               <p class="eyebrow">STATUS</p>
@@ -307,7 +358,7 @@
 
   <dialog id="repair-dialog">
     <form method="dialog" id="repair-form">
-      <div class="dialog-head"><div><p class="eyebrow">SIKKER LINKRETTELSE</p><h2>Ret link i WordPress</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
+      <div class="dialog-head"><div><p class="eyebrow">SIKKER LINKRETTELSE</p><h2 id="repair-title">Ret link i WordPress</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Luk">×</button></div>
       <input type="hidden" name="finding_id"><input type="hidden" name="before_hash">
       <label>Kildeside<select name="source_url" required></select></label>
       <fieldset class="segmented repair-mode"><legend>Handling</legend><label><input type="radio" name="repair_mode" value="replace" checked><span>Ret link</span></label><label><input type="radio" name="repair_mode" value="unlink"><span>Fjern link, behold teksten</span></label></fieldset>

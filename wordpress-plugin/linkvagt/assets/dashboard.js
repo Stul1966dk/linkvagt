@@ -9,8 +9,16 @@ const state = {
   backup: null,
   diagnostics: { items: [], counts: { error: 0, warning: 0 } },
   resultCategory: 'all',
-  findingSort: { key: 'category', direction: 'asc' }
+  findingSort: { key: 'category', direction: 'asc' },
+  // Arbejdsvisningen for ét website. followLatest betyder, at resultatet
+  // skifter automatisk, når en nyere fuld scanning bliver færdig.
+  workspace: { siteId: null, scans: [], tab: 'results', followLatest: true, siteList: '' },
+  // Planlægningskalenderen. previous holder datoerne før "Fordel jævnt".
+  plan: { time: null, previous: null, dragging: false }
 };
+
+const WORKSPACE_STORAGE_KEY = 'linkvagt.workspaceSite';
+const RESULT_TABS = '#results-body .result-tabs button';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -209,7 +217,7 @@ function renderOverviewSites() {
   const sites = state.sites.slice(0, 8);
   $('#overview-sites').innerHTML = sites.length ? sites.map((site) => {
     const status = site.latest_scan_status === 'running' ? ['running', 'I gang'] : site.broken_count ? ['broken', 'Problemer'] : site.latest_scan_id ? ['ok', 'OK'] : site.latest_result_scan_id ? ['running', 'Delvist scannet'] : ['ok', 'Ikke scannet'];
-    return `<tr>${`<td>${siteCell(site)}</td>`}<td><span class="badge ${status[0]}">${status[1]}</span></td><td>${issueCounts(site)}</td><td>${relativeDate(site.last_checked_at)}</td><td><div class="row-actions"><button class="icon-button" data-action="scan" data-id="${site.id}" title="Start scanning" aria-label="Start scanning">↻</button><button class="icon-button" data-action="open-latest" data-id="${site.id}" title="Se seneste resultat" aria-label="Se seneste resultat">→</button></div></td></tr>`;
+    return `<tr>${`<td>${siteCell(site)}</td>`}<td><span class="badge ${status[0]}">${status[1]}</span></td><td>${issueCounts(site)}</td><td>${relativeDate(site.last_checked_at)}</td><td><div class="row-actions"><button class="icon-button" data-action="scan" data-id="${site.id}" title="Start scanning" aria-label="Start scanning">↻</button><button class="icon-button" data-action="workspace" data-id="${site.id}" title="Arbejd på site" aria-label="Arbejd på site">◧</button><button class="icon-button" data-action="open-latest" data-id="${site.id}" title="Se seneste resultat" aria-label="Se seneste resultat">→</button></div></td></tr>`;
   }).join('') : emptyRow(5, 'Ingen hjemmesider endnu', 'Tilføj den første hjemmeside for at begynde overvågningen.');
 }
 
@@ -233,7 +241,7 @@ function filteredSites() {
 
 function renderSites() {
   const sites = filteredSites();
-  $('#sites-table').innerHTML = sites.length ? sites.map((site) => `<tr><td>${siteCell(site)}</td><td>${relativeDate(site.last_checked_at)}</td><td><span class="issue red">${site.broken_count || 0}</span></td><td><span class="issue blue">${site.redirect_count || 0}</span></td><td><span class="issue amber">${site.warning_count || 0}</span></td><td><div class="row-actions"><button class="icon-button" data-action="scan" data-id="${site.id}" title="Start scanning">↻</button><button class="icon-button ${site.wordpress_connected ? 'connected' : ''}" data-action="wordpress" data-id="${site.id}" title="${site.wordpress_connected ? 'WordPress er testet' : site.wordpress_configured ? 'WordPress skal testes' : 'Forbind WordPress'}">W</button><button class="icon-button" data-action="edit" data-id="${site.id}" title="Rediger">✎</button><button class="icon-button" data-action="open-latest" data-id="${site.id}" title="Se resultat">→</button><button class="icon-button" data-action="delete" data-id="${site.id}" title="Slet">×</button></div></td></tr>`).join('') : emptyRow(6, 'Ingen match', 'Prøv at ændre søgningen eller filteret.');
+  $('#sites-table').innerHTML = sites.length ? sites.map((site) => `<tr><td>${siteCell(site)}</td><td>${relativeDate(site.last_checked_at)}</td><td><span class="issue red">${site.broken_count || 0}</span></td><td><span class="issue blue">${site.redirect_count || 0}</span></td><td><span class="issue amber">${site.warning_count || 0}</span></td><td><div class="row-actions"><button class="icon-button" data-action="scan" data-id="${site.id}" title="Start scanning">↻</button><button class="icon-button ${site.wordpress_connected ? 'connected' : ''}" data-action="wordpress" data-id="${site.id}" title="${site.wordpress_connected ? 'WordPress er testet' : site.wordpress_configured ? 'WordPress skal testes' : 'Forbind WordPress'}">W</button><button class="icon-button" data-action="edit" data-id="${site.id}" title="Rediger">✎</button><button class="icon-button" data-action="workspace" data-id="${site.id}" title="Arbejd på site">◧</button><button class="icon-button" data-action="open-latest" data-id="${site.id}" title="Se resultat">→</button><button class="icon-button" data-action="delete" data-id="${site.id}" title="Slet">×</button></div></td></tr>`).join('') : emptyRow(6, 'Ingen match', 'Prøv at ændre søgningen eller filteret.');
 }
 
 function renderScanFilters() {
@@ -242,15 +250,19 @@ function renderScanFilters() {
   $('#scan-site-filter').value = current;
 }
 
+function scanTypeName(scan) {
+  return scan.scan_origin === 'scheduled'
+    ? 'Automatisk ugekontrol'
+    : ({ page: 'Enkeltside', link: 'Enkelt link', site: 'Hele websitet' }[scan.mode] || scan.mode);
+}
+
 function renderScans() {
   const siteId = $('#scan-site-filter').value;
   const status = $('#scan-status-filter').value;
   const scans = state.scans.filter((scan) => (!siteId || String(scan.site_id) === siteId) && (status === 'all' || scan.status === status));
   $('#scans-table').innerHTML = scans.length ? scans.map((scan) => {
     const site = state.sites.find((item) => item.id === scan.site_id);
-    const scanType = scan.scan_origin === 'scheduled'
-      ? 'Automatisk ugekontrol'
-      : ({ page: 'Enkeltside', link: 'Enkelt link', site: 'Hele websitet' }[scan.mode] || scan.mode);
+    const scanType = scanTypeName(scan);
     const hasDetails = scan.status === 'completed' && scan.details_retained !== 0;
     const historyNote = scan.status === 'completed' && !hasDetails ? '<small>Kun oversigt</small>' : '';
     return `<tr><td>${site ? siteCell(site) : escapeHtml(scan.site_name || 'Ukendt')}</td><td>${fmtDate(scan.started_at || scan.created_at)}</td><td>${scanType}</td><td><span class="badge ${scan.status}">${statusName(scan.status)}</span>${historyNote}${scan.error_message ? `<small title="${escapeHtml(scan.error_message)}">${escapeHtml(scan.error_message)}</small>` : ''}</td><td>${scan.links_checked || 0}</td><td>${issueCounts(scan)}</td><td><div class="row-actions">${hasDetails ? `<button class="icon-button" data-action="result" data-scan="${scan.id}" title="Se resultat">→</button>` : ''}</div></td></tr>`;
@@ -371,14 +383,17 @@ async function loadBase() {
   state.scans = scans;
   renderMetrics(); renderOverviewSites(); renderActivity(); renderSites(); renderScanFilters(); renderScans();
   renderDiagnosticSites();
+  renderWorkspacePicker();
   if (state.view === 'results' && state.findings.length) renderFindings();
+  if (state.view === 'site') await loadWorkspace();
+  if (state.view === 'plan' && !state.plan.dragging) renderPlan();
 }
 
 function showView(view) {
   state.view = view;
   $$('.view').forEach((element) => element.classList.toggle('active', element.id === `view-${view}`));
   $$('.nav-item').forEach((element) => element.classList.toggle('active', element.dataset.view === view));
-  const names = { overview: 'Overblik', sites: 'Hjemmesider', scans: 'Scanninger', settings: 'Indstillinger', support: 'Support', results: 'Scanningsresultat' };
+  const names = { overview: 'Overblik', sites: 'Hjemmesider', site: 'Arbejd på site', scans: 'Scanninger', plan: 'Planlægning', settings: 'Indstillinger', support: 'Support', results: 'Scanningsresultat' };
   $('#page-title').textContent = names[view];
   $('#add-site-button').hidden = !['overview', 'sites'].includes(view);
   $('.sidebar').classList.remove('open');
@@ -404,32 +419,388 @@ function openSiteDialog(site = null) {
   $('#site-dialog').showModal();
 }
 
-function openScanDialog(site) {
+function openScanDialog(site, scope = 'site') {
   const form = $('#scan-form');
   form.reset();
   form.elements.site_id.value = site.id;
+  form.elements.scope.value = scope;
   $('#scan-site-note').textContent = `Scanningen føjes til køen for ${site.name}.`;
-  $('#target-url-label').hidden = true;
+  syncScanScope();
   $('#scan-dialog').showModal();
 }
 
-async function openResults(scanId) {
-  const scan = state.scans.find((item) => item.id === Number(scanId)) || (state.summary.latest || []).find((item) => item.id === Number(scanId));
-  if (!scan) return toast('Scanningen kunne ikke findes', 'error');
-  if (scan.details_retained === 0) return toast('Kun oversigten fra denne scanning er gemt');
-  const site = state.sites.find((item) => item.id === scan.site_id);
+function syncScanScope() {
+  const form = $('#scan-form');
+  const scope = form.elements.scope.value;
+  const needsUrl = scope !== 'site';
+  $('#target-url-label').hidden = !needsUrl;
+  $('#target-url-text').textContent = scope === 'link' ? 'Linkets URL' : 'Sidens URL';
+  form.elements.target_url.required = needsUrl;
+}
+
+function findScan(scanId) {
+  const id = Number(scanId);
+  return [...state.workspace.scans, ...state.scans, ...(state.summary.latest || [])].find((item) => item.id === id) || null;
+}
+
+// Resultatlisten findes én gang og flyttes mellem den globale resultatside og
+// arbejdsvisningen, så alle handlinger i listen virker ens begge steder.
+function mountResults(target) {
+  const host = target === 'site' ? $('#workspace-results') : $('#view-results');
+  const body = $('#results-body');
+  if (body.parentElement !== host) host.append(body);
+  body.hidden = false;
+}
+
+async function loadResults(scan, { keepFilters = false } = {}) {
   state.selectedScan = scan;
-  state.resultCategory = 'all';
+  if (!keepFilters) {
+    state.resultCategory = 'all';
+    $('#finding-search').value = '';
+    $$(RESULT_TABS).forEach((button) => button.classList.toggle('active', button.dataset.category === 'all'));
+  }
   state.findings = await api(`/api/findings?scan_id=${scan.id}&include_ignored=1`);
+  const site = state.sites.find((item) => item.id === scan.site_id);
   $('#result-site-name').textContent = site?.name || scan.site_name || '';
   $('#result-heading').textContent = `Scanning #${scan.id}`;
   $('#result-meta').textContent = `${fmtDate(scan.completed_at || scan.created_at)} · ${scan.links_checked} links kontrolleret`;
   $('#csv-link').href = `${window.LINKVAGT.exportUrl}&scan_id=${scan.id}&_wpnonce=${encodeURIComponent(window.LINKVAGT.exportNonce)}`;
-  $$('.result-tabs button').forEach((button) => button.classList.toggle('active', button.dataset.category === 'all'));
-  $('#finding-search').value = '';
   renderFindings();
+}
+
+// Genindlæser det viste resultat efter en handling, uden at fane, søgning
+// eller visning skifter.
+async function refreshResults() {
+  if (state.selectedScan) await loadResults(state.selectedScan, { keepFilters: true });
+}
+
+async function openResults(scanId) {
+  const scan = findScan(scanId);
+  if (!scan) return toast('Scanningen kunne ikke findes', 'error');
+  if (scan.details_retained === 0) return toast('Kun oversigten fra denne scanning er gemt');
+  await loadResults(scan);
+  mountResults('results');
   showView('results');
 }
+
+function workspaceSite() {
+  return state.sites.find((site) => site.id === state.workspace.siteId) || null;
+}
+
+function renderWorkspacePicker() {
+  // Listen tegnes kun om, når websites ændrer sig, så en åben rullemenu ikke
+  // lukker ved baggrundsopdateringen.
+  const signature = state.sites.map((site) => `${site.id}:${site.name}`).join('|');
+  if (signature !== state.workspace.siteList) {
+    state.workspace.siteList = signature;
+    $('#workspace-site').innerHTML = '<option value="">Vælg en hjemmeside…</option>'
+      + state.sites.map((site) => `<option value="${site.id}">${escapeHtml(site.name)}</option>`).join('');
+  }
+  $('#workspace-site').value = state.workspace.siteId ? String(state.workspace.siteId) : '';
+}
+
+async function openWorkspace(siteId) {
+  const id = Number(siteId) || null;
+  if (id !== state.workspace.siteId) {
+    state.workspace = { ...state.workspace, siteId: id, scans: [], tab: 'results', followLatest: true };
+    state.selectedScan = null;
+    state.findings = [];
+  }
+  try { localStorage.setItem(WORKSPACE_STORAGE_KEY, id ? String(id) : ''); } catch {}
+  showView('site');
+  renderWorkspacePicker();
+  showWorkspaceTab(state.workspace.tab);
+  await loadWorkspace({ reloadResults: true });
+}
+
+function latestFullScan() {
+  const usable = state.workspace.scans.filter((scan) => scan.status === 'completed' && scan.details_retained !== 0);
+  return usable.find((scan) => scan.mode === 'site') || usable[0] || null;
+}
+
+async function loadWorkspace({ reloadResults = false } = {}) {
+  const site = workspaceSite();
+  $('#workspace-empty').hidden = Boolean(site);
+  $('#workspace').hidden = !site;
+  if (!site) return;
+  state.workspace.scans = await api(`/api/scans?site_id=${site.id}`);
+  if (workspaceSite()?.id !== site.id) return;
+  renderWorkspace();
+  const latest = latestFullScan();
+  const showingSite = state.selectedScan?.site_id === site.id;
+  if (reloadResults || !showingSite || (state.workspace.followLatest && latest && latest.id !== state.selectedScan?.id)) {
+    await showWorkspaceScan(state.workspace.followLatest || !showingSite ? latest : state.selectedScan, { follow: state.workspace.followLatest || !showingSite });
+  }
+  if (state.workspace.tab === 'changes') await loadWorkspaceChanges();
+}
+
+function renderWorkspace() {
+  const site = workspaceSite();
+  if (!site) return;
+  let host = site.base_url;
+  try { host = new URL(site.base_url).hostname; } catch {}
+  const schedule = site.auto_frequency === 'manual'
+    ? 'Kun manuel scanning'
+    : `${autoFrequencyName(site.auto_frequency)}${site.auto_next_date ? ` · næste ${fmtDate(site.auto_next_date, false)}` : ''}`;
+  const wordpress = site.wordpress_connected ? 'WordPress forbundet' : site.wordpress_configured ? 'WordPress skal testes' : 'WordPress ikke forbundet';
+  $('#workspace-host').textContent = host.toUpperCase();
+  $('#workspace-name').textContent = site.name;
+  $('#workspace-meta').textContent = `Sidst scannet ${relativeDate(site.last_checked_at).toLowerCase()} · ${schedule} · ${wordpress}`;
+  $('#workspace-wordpress').classList.toggle('connected', Boolean(site.wordpress_connected));
+  $('#workspace-wordpress').textContent = site.wordpress_connected ? 'WordPress ✓' : 'Forbind WordPress';
+
+  const current = state.summary.current?.site_id === site.id ? state.summary.current : null;
+  const queued = state.workspace.scans.filter((scan) => scan.status === 'queued').length;
+  const progress = current ? scanProgress(current) : null;
+  $('#workspace-progress').hidden = !current && !queued;
+  $('#workspace-progress').textContent = current
+    ? `${scanTypeName(current)} i gang · ${progress.phase} · ${progress.percent}%${queued ? ` · ${queued} mere i kø` : ''}`
+    : `${queued} scanning${queued === 1 ? '' : 'er'} i kø`;
+
+  const latest = latestFullScan();
+  const metrics = [
+    ['Døde links', site.broken_count || 0, site.broken_count ? 'Kræver opmærksomhed' : 'Ingen aktuelle fejl', site.broken_count ? 'alert' : ''],
+    ['Redirects', site.redirect_count || 0, 'Kan opdateres til slutadresse'],
+    ['Advarsler', site.warning_count || 0, 'Blokering, timeout m.m.'],
+    ['Links kontrolleret', latest?.links_checked || 0, latest ? `Seneste fulde scanning ${fmtDate(latest.completed_at, false)}` : 'Ingen fuld scanning endnu']
+  ];
+  $('#workspace-metrics').innerHTML = metrics.map(([label, value, note, className]) => `<div class="metric"><div class="metric-label">${label}</div><div class="metric-value">${value}</div><div class="metric-note ${className || ''}">${note}</div></div>`).join('');
+
+  const scans = state.workspace.scans;
+  $('#workspace-scan-count').textContent = String(scans.length);
+  $('#workspace-scans').innerHTML = scans.length ? scans.map((scan) => {
+    const hasDetails = scan.status === 'completed' && scan.details_retained !== 0;
+    const shown = scan.id === state.selectedScan?.id;
+    return `<tr class="${shown ? 'selected-row' : ''}"><td>${fmtDate(scan.started_at || scan.created_at)}</td><td>${escapeHtml(scanTypeName(scan))}${scan.target_url ? `<small>${escapeHtml(scan.target_url)}</small>` : ''}</td><td><span class="badge ${scan.status}">${statusName(scan.status)}</span>${scan.status === 'completed' && !hasDetails ? '<small>Kun oversigt</small>' : ''}${scan.error_message ? `<small title="${escapeHtml(scan.error_message)}">${escapeHtml(scan.error_message)}</small>` : ''}</td><td>${scan.links_checked || 0}</td><td>${issueCounts(scan)}</td><td><div class="row-actions">${hasDetails ? `<button class="button secondary" data-action="workspace-scan" data-scan="${scan.id}">${shown ? 'Vises' : 'Vis resultat'}</button>` : ''}</div></td></tr>`;
+  }).join('') : emptyRow(6, 'Ingen scanninger endnu', 'Start den første scanning af websitet.');
+}
+
+async function showWorkspaceScan(scan, { follow = false } = {}) {
+  state.workspace.followLatest = follow;
+  mountResults('site');
+  if (!scan) {
+    state.selectedScan = null;
+    state.findings = [];
+    $('#results-body').hidden = true;
+    $('#workspace-result-caption').textContent = 'Der er ingen færdig scanning endnu. Start en scanning for at se resultater.';
+    return;
+  }
+  const sameScan = state.selectedScan?.id === scan.id;
+  await loadResults(scan, { keepFilters: sameScan });
+  const latest = latestFullScan();
+  $('#workspace-result-caption').innerHTML = `Viser ${escapeHtml(scanTypeName(scan).toLowerCase())}${scan.target_url ? ` af ${escapeHtml(scan.target_url)}` : ''} fra ${fmtDate(scan.completed_at || scan.created_at)} · ${scan.links_checked || 0} links kontrolleret`
+    + (latest && latest.id !== scan.id ? ` · <button type="button" class="text-button" data-action="workspace-latest">Vis seneste fulde scanning</button>` : '');
+  renderWorkspace();
+}
+
+function showWorkspaceTab(tab) {
+  state.workspace.tab = tab;
+  $$('[data-workspace-tab]').forEach((button) => button.classList.toggle('active', button.dataset.workspaceTab === tab));
+  ['results', 'scans', 'changes'].forEach((name) => { $(`#workspace-panel-${name}`).hidden = name !== tab; });
+}
+
+async function loadWorkspaceChanges() {
+  const site = workspaceSite();
+  if (!site) return;
+  if (!site.wordpress_configured) {
+    $('#workspace-changes').innerHTML = '<div class="empty"><strong>WordPress er ikke forbundet</strong>Forbind WordPress for at rette og fjerne links direkte fra LinkVagt.</div>';
+    return;
+  }
+  const changes = await api(`/api/sites/${site.id}/wordpress/changes`);
+  $('#workspace-changes').innerHTML = changes.length
+    ? changeHistoryMarkup(changes, site.id)
+    : '<div class="empty"><strong>Ingen linkrettelser endnu</strong>Rettelser og fjernede links på dette website vises her og kan fortrydes.</div>';
+}
+
+// ---------- Planlægning ----------
+// Datoer håndteres som 'YYYY-MM-DD' og regnes i UTC, så sommertid ikke
+// forskyder dem. Gentagelser følger serverens regler: +7 dage, +14 dage
+// eller +1 måned.
+const PLAN_DAYS = 28;
+const pad2 = (value) => String(value).padStart(2, '0');
+const parseIsoDate = (value) => new Date(`${value}T00:00:00Z`);
+const toIsoDate = (date) => date.toISOString().slice(0, 10);
+const addDaysIso = (value, days) => toIsoDate(new Date(parseIsoDate(value).getTime() + days * 86_400_000));
+const todayIso = () => { const now = new Date(); return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`; };
+const planPeriodDays = { weekly: 7, biweekly: 14, monthly: 28 };
+
+function nextOccurrence(value, frequency) {
+  if (frequency !== 'monthly') return addDaysIso(value, frequency === 'biweekly' ? 14 : 7);
+  const date = parseIsoDate(value);
+  date.setUTCMonth(date.getUTCMonth() + 1);
+  return toIsoDate(date);
+}
+
+function occurrences(frequency, first, until) {
+  const dates = [];
+  for (let date = first; date <= until && dates.length < 60; date = nextOccurrence(date, frequency)) dates.push(date);
+  return dates;
+}
+
+function plannedSites() {
+  return state.sites.filter((site) => site.auto_frequency !== 'manual');
+}
+
+// Belastning = links i sitets seneste fulde scanning. Ukendte sites får
+// gennemsnittet, så de ikke ser gratis ud.
+function planLoads() {
+  const known = plannedSites().map((site) => site.scan_load || 0).filter(Boolean);
+  const fallback = known.length ? Math.round(known.reduce((sum, value) => sum + value, 0) / known.length) : 100;
+  return new Map(plannedSites().map((site) => [site.id, { load: site.scan_load || fallback, estimated: !site.scan_load }]));
+}
+
+function firstPlannedDate(site, today) {
+  return site.auto_next_date && site.auto_next_date >= today ? site.auto_next_date : today;
+}
+
+async function loadScheduleTime() {
+  const schedule = await api('/api/settings/schedule');
+  state.plan.time = schedule.time || null;
+}
+
+function renderPlan() {
+  const today = todayIso();
+  const start = addDaysIso(today, -((parseIsoDate(today).getUTCDay() + 6) % 7));
+  const end = addDaysIso(start, PLAN_DAYS - 1);
+  const loads = planLoads();
+  const days = new Map(Array.from({ length: PLAN_DAYS }, (_, index) => [addDaysIso(start, index), { load: 0, items: [] }]));
+  for (const site of plannedSites()) {
+    const first = firstPlannedDate(site, today);
+    occurrences(site.auto_frequency, first, end).forEach((date, index) => {
+      const day = days.get(date);
+      if (!day) return;
+      day.items.push({ site, primary: index === 0, overdue: index === 0 && (!site.auto_next_date || site.auto_next_date < today) });
+      day.load += loads.get(site.id).load;
+    });
+  }
+  const future = [...days].filter(([date]) => date >= today);
+  const maxLoad = Math.max(1, ...future.map(([, day]) => day.load));
+  const weekdays = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
+  const monthName = (date) => new Intl.DateTimeFormat('da-DK', { month: 'short', timeZone: 'UTC' }).format(parseIsoDate(date));
+  $('#plan-calendar').innerHTML = weekdays.map((name) => `<div class="plan-weekday">${name}</div>`).join('') + [...days].map(([date, day]) => {
+    const past = date < today;
+    // Orange: flere websites samme dag, så kørslen den nat bliver længere.
+    const busy = !past && day.items.length > 1;
+    const dayNumber = Number(date.slice(8));
+    const label = dayNumber === 1 || date === start ? `${dayNumber}. ${monthName(date)}` : `${dayNumber}.`;
+    const chips = day.items
+      .sort((left, right) => Number(right.primary) - Number(left.primary) || left.site.name.localeCompare(right.site.name, 'da'))
+      .map(({ site, primary, overdue }) => {
+        const info = loads.get(site.id);
+        const title = `${site.name} · ${autoFrequencyName(site.auto_frequency).toLowerCase()} · ${info.estimated ? 'ca. ' : ''}${info.load} links${overdue ? ' · forsinket, køres ved næste kørsel' : ''}${primary ? '' : ' · gentagelse'}`;
+        return `<button type="button" class="plan-chip ${primary ? '' : 'repeat'} ${overdue ? 'overdue' : ''}" ${primary ? 'draggable="true"' : ''} data-plan-site="${site.id}" title="${escapeHtml(title)}">${escapeHtml(site.name)}</button>`;
+      }).join('');
+    return `<div class="plan-day ${past ? 'past' : ''} ${date === today ? 'today' : ''} ${busy ? 'busy' : ''}" data-plan-date="${date}"><div class="plan-day-head"><span>${label}</span><small>${day.items.length ? `${day.load} links` : ''}</small></div><div class="plan-load"><span style="width:${Math.round((day.load / maxLoad) * 100)}%"></span></div>${chips}</div>`;
+  }).join('');
+
+  const manual = state.sites.length - plannedSites().length;
+  const busiest = future.reduce((best, entry) => (entry[1].load > (best?.[1].load || 0) ? entry : best), null);
+  $('#plan-intro').textContent = `${plannedSites().length} websites scannes automatisk${state.plan.time ? ` fra kl. ${state.plan.time}` : ''}, ét ad gangen. Fordel dem, så ingen dag bliver for tung for serveren.`;
+  $('#plan-footnote').textContent = [
+    busiest && busiest[1].load ? `Travleste dag: ${fmtDate(busiest[0], false)} med ${busiest[1].items.length} website${busiest[1].items.length === 1 ? '' : 's'} og ${busiest[1].load} links.` : '',
+    manual ? `${manual} website${manual === 1 ? '' : 's'} scannes kun manuelt og vises ikke.` : '',
+    'Belastningen er antal links i sitets seneste fulde scanning.'
+  ].filter(Boolean).join(' ');
+  $('#plan-undo').hidden = !state.plan.previous;
+}
+
+// Placerer de tungeste sites først på den dag i deres periode, der giver
+// den laveste maksimale belastning over de næste otte uger.
+function spreadSchedule() {
+  const loads = planLoads();
+  const firstDay = addDaysIso(todayIso(), 1);
+  const horizonEnd = addDaysIso(firstDay, 55);
+  const dayLoads = new Map();
+  const result = {};
+  const sites = [...plannedSites()].sort((left, right) => loads.get(right.id).load - loads.get(left.id).load || left.name.localeCompare(right.name, 'da'));
+  for (const site of sites) {
+    const load = loads.get(site.id).load;
+    let best = null;
+    for (let offset = 0; offset < planPeriodDays[site.auto_frequency]; offset += 1) {
+      const candidate = addDaysIso(firstDay, offset);
+      const dates = occurrences(site.auto_frequency, candidate, horizonEnd);
+      const peak = Math.max(...dates.map((date) => (dayLoads.get(date) || 0) + load));
+      const total = dates.reduce((sum, date) => sum + (dayLoads.get(date) || 0), 0);
+      if (!best || peak < best.peak || (peak === best.peak && total < best.total)) best = { candidate, dates, peak, total };
+    }
+    best.dates.forEach((date) => dayLoads.set(date, (dayLoads.get(date) || 0) + load));
+    result[site.id] = best.candidate;
+  }
+  return result;
+}
+
+async function saveScheduleDates(dates) {
+  await api('/api/schedule/dates', { method: 'POST', body: JSON.stringify({ dates }) });
+  await loadBase();
+  renderPlan();
+}
+
+$('#plan-spread').addEventListener('click', async () => {
+  const proposal = spreadSchedule();
+  const today = todayIso();
+  const changed = Object.entries(proposal).filter(([id, date]) => state.sites.find((site) => site.id === Number(id))?.auto_next_date !== date);
+  if (!changed.length) return toast('Scanningerne er allerede fordelt jævnt');
+  if (!window.confirm(`Flyt ${changed.length} website${changed.length === 1 ? '' : 's'} til nye datoer, så belastningen fordeles jævnt?\n\nDu kan fortryde bagefter.`)) return;
+  const previous = Object.fromEntries(changed.map(([id]) => {
+    const current = state.sites.find((site) => site.id === Number(id))?.auto_next_date;
+    return [id, current && current >= today ? current : today];
+  }));
+  try {
+    await saveScheduleDates(Object.fromEntries(changed));
+    state.plan.previous = previous;
+    renderPlan();
+    toast(`${changed.length} website${changed.length === 1 ? '' : 's'} er fordelt`);
+  } catch (error) { toast(error.message, 'error'); }
+});
+
+$('#plan-undo').addEventListener('click', async () => {
+  if (!state.plan.previous) return;
+  try {
+    await saveScheduleDates(state.plan.previous);
+    state.plan.previous = null;
+    renderPlan();
+    toast('Fordelingen er fortrudt');
+  } catch (error) { toast(error.message, 'error'); }
+});
+
+$('#plan-calendar').addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-plan-site]');
+  const site = chip && state.sites.find((item) => item.id === Number(chip.dataset.planSite));
+  if (site) openSiteDialog(site);
+});
+$('#plan-calendar').addEventListener('dragstart', (event) => {
+  const chip = event.target.closest('.plan-chip[draggable="true"]');
+  if (!chip) return;
+  state.plan.dragging = true;
+  chip.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', chip.dataset.planSite);
+});
+$('#plan-calendar').addEventListener('dragend', () => {
+  state.plan.dragging = false;
+  $$('#plan-calendar .dragging, #plan-calendar .drop-target').forEach((element) => element.classList.remove('dragging', 'drop-target'));
+});
+$('#plan-calendar').addEventListener('dragover', (event) => {
+  const day = event.target.closest('.plan-day');
+  if (!day || day.dataset.planDate < todayIso()) return;
+  event.preventDefault();
+  $$('#plan-calendar .drop-target').forEach((element) => element !== day && element.classList.remove('drop-target'));
+  day.classList.add('drop-target');
+});
+$('#plan-calendar').addEventListener('drop', async (event) => {
+  const day = event.target.closest('.plan-day');
+  const site = state.sites.find((item) => item.id === Number(event.dataTransfer.getData('text/plain')));
+  event.preventDefault();
+  state.plan.dragging = false;
+  if (!day || !site || day.dataset.planDate < todayIso()) return renderPlan();
+  if (site.auto_next_date === day.dataset.planDate) return renderPlan();
+  try {
+    await saveScheduleDates({ [site.id]: day.dataset.planDate });
+    state.plan.previous = null;
+    renderPlan();
+    toast(`${site.name} scannes nu ${fmtDate(day.dataset.planDate, false)}`);
+  } catch (error) { toast(error.message, 'error'); renderPlan(); }
+});
 
 async function loadMailSettings() {
   const settings = await api('/api/settings/mail');
@@ -566,6 +937,7 @@ const auditActionName = (action) => ({
   'ignore.created': 'Link ignoreret',
   'ignore.deleted': 'Ignorering fjernet',
   'ignore.marked_ok': 'Link godkendt som virkende',
+  'schedule.dates_updated': 'Scanningsplan ændret',
   'settings.mail_updated': 'Mailindstillinger gemt',
   'settings.test_mail_sent': 'Testmail sendt',
   'settings.exclusions_updated': 'Ekskluderinger opdateret',
@@ -587,12 +959,17 @@ async function loadAuditLog() {
 }
 
 function renderWordpressHistory(changes) {
-  $('#wordpress-history').innerHTML = changes.length ? `<h3>Seneste ændringer</h3>${changes.map((change) => {
+  const siteId = $('#wordpress-form').elements.site_id.value;
+  $('#wordpress-history').innerHTML = changes.length ? `<h3>Seneste ændringer</h3>${changeHistoryMarkup(changes, siteId)}` : '';
+}
+
+function changeHistoryMarkup(changes, siteId) {
+  return changes.map((change) => {
     const anchorChange = change.old_anchor_text !== change.new_anchor_text && change.new_anchor_text
       ? `<small>“${escapeHtml(change.old_anchor_text || '')}” → “${escapeHtml(change.new_anchor_text)}”</small>`
       : '';
-    return `<div class="history-row"><div><strong>${escapeHtml(change.post_title || change.source_url)}</strong><small>${escapeHtml(change.old_url)} → ${change.new_url ? escapeHtml(change.new_url) : 'link fjernet, tekst bevaret'}</small>${anchorChange}</div><span class="badge ${change.status === 'applied' ? 'completed' : change.status === 'failed' ? 'failed' : 'warning'}">${escapeHtml({ applied: 'Rettet', undone: 'Fortrudt', rolled_back: 'Gendannet', failed: 'Fejlet', pending: 'I gang' }[change.status] || change.status)}</span>${change.status === 'applied' ? `<button type="button" class="button secondary" data-action="undo-change" data-change="${change.id}">Fortryd</button>` : ''}</div>`;
-  }).join('')}` : '';
+    return `<div class="history-row"><div><strong>${escapeHtml(change.post_title || change.source_url)}</strong><small>${escapeHtml(change.old_url)} → ${change.new_url ? escapeHtml(change.new_url) : 'link fjernet, tekst bevaret'}</small>${anchorChange}</div><span class="badge ${change.status === 'applied' ? 'completed' : change.status === 'failed' ? 'failed' : 'warning'}">${escapeHtml({ applied: 'Rettet', undone: 'Fortrudt', rolled_back: 'Gendannet', failed: 'Fejlet', pending: 'I gang' }[change.status] || change.status)}</span>${change.status === 'applied' ? `<button type="button" class="button secondary" data-action="undo-change" data-change="${change.id}" data-site="${siteId}">Fortryd</button>` : ''}</div>`;
+  }).join('');
 }
 
 async function openWordpressDialog(site) {
@@ -633,6 +1010,7 @@ function syncRepairMode() {
   $$('[data-repair-unlink]', form).forEach((element) => { element.hidden = !unlink; });
   form.elements.new_url.required = !unlink;
   $('#apply-repair').textContent = unlink ? 'Godkend og fjern link' : 'Godkend og ret';
+  $('#repair-title').textContent = unlink ? 'Fjern link i WordPress' : 'Ret link i WordPress';
 }
 
 function openRepairDialog(finding, mode = 'replace') {
@@ -666,7 +1044,15 @@ document.addEventListener('click', async (event) => {
   }
   const nav = event.target.closest('[data-view]');
   if (nav) {
+    if (nav.dataset.view === 'site') {
+      openWorkspace(state.workspace.siteId).catch((error) => toast(error.message, 'error'));
+      return;
+    }
     showView(nav.dataset.view);
+    if (nav.dataset.view === 'plan') {
+      renderPlan();
+      loadScheduleTime().then(renderPlan).catch((error) => toast(error.message, 'error'));
+    }
     if (nav.dataset.view === 'settings') {
       Promise.all([loadMailSettings(), loadExclusionSettings(), loadBackupStatus(), loadScheduleStatus()]).catch((error) => toast(error.message, 'error'));
     }
@@ -684,6 +1070,30 @@ document.addEventListener('click', async (event) => {
   }
   const go = event.target.closest('[data-go]');
   if (go) return showView(go.dataset.go);
+  const workspaceTab = event.target.closest('[data-workspace-tab]');
+  if (workspaceTab) {
+    showWorkspaceTab(workspaceTab.dataset.workspaceTab);
+    if (workspaceTab.dataset.workspaceTab === 'changes') loadWorkspaceChanges().catch((error) => toast(error.message, 'error'));
+    return;
+  }
+  const workspaceAction = event.target.closest('[data-workspace-action]');
+  if (workspaceAction) {
+    const current = workspaceSite();
+    if (!current) return;
+    const run = {
+      'scan-site': async () => {
+        await api(`/api/sites/${current.id}/scan`, { method: 'POST', body: JSON.stringify({ mode: 'site', target_url: null }) });
+        await loadBase();
+        showWorkspaceTab('scans');
+        toast(`Scanning af ${current.name} er føjet til køen`);
+      },
+      'scan-target': async () => openScanDialog(current, 'page'),
+      wordpress: async () => openWordpressDialog(current),
+      edit: async () => openSiteDialog(current)
+    }[workspaceAction.dataset.workspaceAction];
+    run?.().catch((error) => toast(error.message, 'error'));
+    return;
+  }
   const action = event.target.closest('[data-action]');
   if (!action) return;
   const site = state.sites.find((item) => item.id === Number(action.dataset.id));
@@ -701,6 +1111,13 @@ document.addEventListener('click', async (event) => {
       else await openResults(site.latest_result_scan_id);
     }
     if (action.dataset.action === 'result') await openResults(action.dataset.scan);
+    if (action.dataset.action === 'workspace') await openWorkspace(site.id);
+    if (action.dataset.action === 'workspace-scan') {
+      const scan = findScan(action.dataset.scan);
+      await showWorkspaceScan(scan, { follow: scan?.id === latestFullScan()?.id });
+      showWorkspaceTab('results');
+    }
+    if (action.dataset.action === 'workspace-latest') await showWorkspaceScan(latestFullScan(), { follow: true });
     if (action.dataset.action === 'ignore') {
       const finding = state.findings.find((item) => item.id === Number(action.dataset.finding));
       const form = $('#ignore-form');
@@ -723,7 +1140,8 @@ document.addEventListener('click', async (event) => {
         body: JSON.stringify({ mode: source ? 'page' : 'link', target_url: source || finding.destination_url })
       });
       await loadBase();
-      showView('scans');
+      if (state.view === 'site') showWorkspaceTab('scans');
+      else showView('scans');
       toast(source ? 'Kildesiden er sat i kø til ny kontrol' : 'Linket er sat i kø til ny kontrol');
     }
     if (action.dataset.action === 'mark-ok') {
@@ -733,19 +1151,20 @@ document.addEventListener('click', async (event) => {
         method: 'POST',
         body: JSON.stringify({ site_id: finding.site_id, destination_url: finding.destination_url, source_url: '', kind: 'ok', finding_id: finding.id })
       });
-      await Promise.all([openResults(state.selectedScan.id), loadBase()]);
+      await Promise.all([refreshResults(), loadBase()]);
       toast('Linket er markeret som virkende');
     }
     if (action.dataset.action === 'unignore') {
       await api(`/api/ignore/${action.dataset.rule}`, { method: 'DELETE' });
-      await Promise.all([openResults(state.selectedScan.id), loadBase()]);
+      await Promise.all([refreshResults(), loadBase()]);
       toast(action.dataset.kind === 'ok' ? 'Godkendelsen er fjernet, og linket overvåges igen' : 'Linket overvåges igen');
     }
     if (action.dataset.action === 'undo-change') {
       if (!window.confirm('Gendan sidens indhold fra backupen før linkrettelsen?')) return;
       await api(`/api/wordpress/changes/${action.dataset.change}/undo`, { method: 'POST', body: '{}' });
-      const siteId = $('#wordpress-form').elements.site_id.value;
-      renderWordpressHistory(await api(`/api/sites/${siteId}/wordpress/changes`));
+      if ($('#wordpress-dialog').open) renderWordpressHistory(await api(`/api/sites/${action.dataset.site}/wordpress/changes`));
+      if (state.view === 'site') await loadWorkspaceChanges();
+      await Promise.all([refreshResults(), loadBase()]);
       toast('Linkrettelsen er fortrudt, og backupen er gendannet');
     }
   } catch (error) { toast(error.message, 'error'); }
@@ -768,10 +1187,16 @@ $('#scan-status-filter').addEventListener('change', renderScans);
 $('#finding-search').addEventListener('input', renderFindings);
 $('#show-ignored').addEventListener('change', renderFindings);
 $('#results-back').addEventListener('click', () => showView('scans'));
+$('#results-workspace').addEventListener('click', () => {
+  if (state.selectedScan) openWorkspace(state.selectedScan.site_id).catch((error) => toast(error.message, 'error'));
+});
+$('#workspace-site').addEventListener('change', (event) => {
+  openWorkspace(event.currentTarget.value).catch((error) => toast(error.message, 'error'));
+});
 
-$$('.result-tabs button').forEach((button) => button.addEventListener('click', () => {
+$$(RESULT_TABS).forEach((button) => button.addEventListener('click', () => {
   state.resultCategory = button.dataset.category;
-  $$('.result-tabs button').forEach((item) => item.classList.toggle('active', item === button));
+  $$(RESULT_TABS).forEach((item) => item.classList.toggle('active', item === button));
   renderFindings();
 }));
 
@@ -784,13 +1209,7 @@ $$('[data-finding-sort]').forEach((button) => button.addEventListener('click', (
   renderFindings();
 }));
 
-$$('#scan-form input[name="scope"]').forEach((radio) => radio.addEventListener('change', () => {
-  if (!radio.checked) return;
-  const needsUrl = radio.value !== 'site';
-  $('#target-url-label').hidden = !needsUrl;
-  $('#target-url-text').textContent = radio.value === 'link' ? 'Linkets URL' : 'Sidens URL';
-  $('#scan-form').elements.target_url.required = needsUrl;
-}));
+$$('#scan-form input[name="scope"]').forEach((radio) => radio.addEventListener('change', syncScanScope));
 
 $('#site-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -822,7 +1241,8 @@ $('#scan-form').addEventListener('submit', async (event) => {
     await api(`/api/sites/${siteId}/scan`, { method: 'POST', body: JSON.stringify({ target_url: target, mode: scope }) });
     $('#scan-dialog').close();
     await loadBase();
-    showView('scans');
+    if (state.view === 'site') showWorkspaceTab('scans');
+    else showView('scans');
     toast('Scanningen er føjet til køen');
   } catch (error) { toast(error.message, 'error'); }
 });
@@ -833,7 +1253,7 @@ $('#ignore-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/ignore', { method: 'POST', body: JSON.stringify(data) });
     $('#ignore-dialog').close();
-    await Promise.all([openResults(state.selectedScan.id), loadBase()]);
+    await Promise.all([refreshResults(), loadBase()]);
     toast('Linket ignoreres fremover');
   } catch (error) { toast(error.message, 'error'); }
 });
@@ -919,7 +1339,7 @@ $('#repair-form').addEventListener('submit', async (event) => {
   try {
     const result = await api('/api/wordpress/apply', { method: 'POST', body: JSON.stringify(data) });
     $('#repair-dialog').close();
-    if (state.selectedScan) await openResults(state.selectedScan.id);
+    await Promise.all([refreshResults(), loadBase()]);
     const anchorMessage = result.anchor_replacement_count ? ` og ${result.anchor_replacement_count} ankertekst${result.anchor_replacement_count === 1 ? '' : 'er'}` : '';
     toast(result.unlink
       ? `${result.replacement_count} link${result.replacement_count === 1 ? '' : 's'} blev fjernet, og teksten er bevaret`
@@ -1032,5 +1452,6 @@ $('#refresh-audit-log').addEventListener('click', () => {
 });
 $('#diagnostic-severity').addEventListener('change', renderDiagnostics);
 
+try { state.workspace.siteId = Number(localStorage.getItem(WORKSPACE_STORAGE_KEY)) || null; } catch {}
 loadBase().catch((error) => toast(error.message, 'error'));
 refreshTimer = setInterval(() => loadBase().catch(() => {}), 8000);

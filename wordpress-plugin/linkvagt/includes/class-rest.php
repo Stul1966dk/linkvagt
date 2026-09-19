@@ -49,6 +49,11 @@ final class Rest
                 'permission_callback' => [$this, 'can_manage'],
             ],
         ]);
+        register_rest_route(self::NS, '/schedule/dates', [
+            'methods' => WP_REST_Server::CREATABLE,
+            'callback' => [$this, 'save_schedule_dates'],
+            'permission_callback' => [$this, 'can_manage'],
+        ]);
         register_rest_route(self::NS, '/sites/(?P<id>\d+)/scan', [
             'methods' => WP_REST_Server::CREATABLE,
             'callback' => [$this, 'queue_scan'],
@@ -272,7 +277,9 @@ final class Rest
                 r.id latest_result_scan_id, r.status latest_result_scan_status,
                 r.completed_at last_checked_at,
                 IF(c.site_id IS NULL,0,1) wordpress_configured,
-                IF(c.verified_at IS NULL,0,1) wordpress_connected
+                IF(c.verified_at IS NULL,0,1) wordpress_connected,
+                (SELECT links_checked FROM {$scans} WHERE site_id=w.id AND mode='site' AND status='completed'
+                 ORDER BY id DESC LIMIT 1) scan_load
              FROM {$sites} w
              LEFT JOIN {$scans} s ON s.id=(
                 SELECT id FROM {$scans} WHERE site_id=w.id AND mode='site'
@@ -738,6 +745,41 @@ final class Rest
         ];
     }
 
+    /**
+     * Gemmer næste automatiske scanningsdato for flere websites på én gang.
+     * Bruges af planlægningskalenderen, både ved træk og ved "Fordel jævnt".
+     */
+    public function save_schedule_dates(WP_REST_Request $request): array|WP_Error
+    {
+        $dates = $request->get_param('dates');
+        if (!is_array($dates) || !$dates) {
+            return new WP_Error('linkvagt_invalid_schedule', 'Der er ingen datoer at gemme.', ['status' => 400]);
+        }
+        global $wpdb;
+        $table = Schema::table('sites');
+        $today = (new \DateTimeImmutable('today', wp_timezone()))->format('Y-m-d');
+        $updates = [];
+        foreach ($dates as $site_id => $date) {
+            $site_id = absint($site_id);
+            $date = sanitize_text_field((string) $date);
+            $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $date, wp_timezone());
+            if (!$parsed || $parsed->format('Y-m-d') !== $date || $date < $today) {
+                return new WP_Error('linkvagt_invalid_schedule', 'Datoen skal være i dag eller senere.', ['status' => 400]);
+            }
+            $frequency = $wpdb->get_var($wpdb->prepare("SELECT auto_frequency FROM {$table} WHERE id=%d", $site_id));
+            if ($frequency === null || $frequency === 'manual') {
+                return new WP_Error('linkvagt_invalid_schedule', 'Websitet findes ikke eller scannes kun manuelt.', ['status' => 400]);
+            }
+            $updates[$site_id] = $date;
+        }
+        $now = current_time('mysql', true);
+        foreach ($updates as $site_id => $date) {
+            $wpdb->update($table, ['auto_next_date' => $date, 'updated_at' => $now], ['id' => $site_id]);
+        }
+        $this->audit('schedule.dates_updated', 'site', count($updates) === 1 ? (int) array_key_first($updates) : null);
+        return ['updated' => count($updates)];
+    }
+
     private function site_exists(int $id): bool
     {
         global $wpdb;
@@ -765,7 +807,7 @@ final class Rest
             : 'weekly';
         $site['sitemap_urls'] = json_decode((string) ($site['sitemap_urls'] ?? '[]'), true) ?: [];
         $site['excluded_domains'] = json_decode((string) ($site['excluded_domains'] ?? '[]'), true) ?: [];
-        foreach (['broken_count', 'redirect_count', 'warning_count', 'links_checked'] as $field) {
+        foreach (['broken_count', 'redirect_count', 'warning_count', 'links_checked', 'scan_load'] as $field) {
             $site[$field] = (int) ($site[$field] ?? 0);
         }
         foreach (['wordpress_configured', 'wordpress_connected'] as $field) {
