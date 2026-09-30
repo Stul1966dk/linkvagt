@@ -56,6 +56,27 @@ final class Reporter
         if (!$rows) {
             return;
         }
+        // Websites uden døde links, redirects og advarsler kommer ikke med i
+        // mailen. Er der ingen tilbage, sendes der slet ingen mail.
+        $clean_ids = [];
+        $rows = array_values(array_filter($rows, static function (array $scan) use (&$clean_ids): bool {
+            $clean = $scan['status'] === 'completed'
+                && (int) $scan['broken_count'] === 0
+                && (int) $scan['redirect_count'] === 0
+                && (int) $scan['warning_count'] === 0;
+            if ($clean) {
+                $clean_ids[] = (int) $scan['id'];
+            }
+            return !$clean;
+        }));
+        if ($clean_ids) {
+            $wpdb->query("UPDATE {$scans} SET report_status='skipped' WHERE id IN (" . implode(',', $clean_ids) . ')');
+        }
+        if (!$rows) {
+            $this->audit('batch_report.skipped', (int) end($scan_ids), ['run_id' => $run_id, 'reason' => 'no_issues']);
+            return;
+        }
+        $ids = implode(',', array_map(static fn (array $scan): int => (int) $scan['id'], $rows));
         $recipients = $this->recipients($settings);
         $totals = ['links' => 0, 'broken' => 0, 'redirects' => 0, 'warnings' => 0, 'failed' => 0, 'new' => 0, 'resolved' => 0];
         $table_rows = '';
@@ -89,7 +110,8 @@ final class Reporter
         );
         $html = '<div style="font-family:Arial,sans-serif;color:#172337;max-width:900px">'
             . '<h1>Samlet ugentlig LinkVagt-rapport</h1>'
-            . '<p><strong>' . count($rows) . '</strong> websites og <strong>' . $totals['links'] . '</strong> links blev behandlet.</p>'
+            . '<p><strong>' . count($rows) . '</strong> websites og <strong>' . $totals['links'] . '</strong> links blev behandlet.'
+            . ($clean_ids ? ' ' . count($clean_ids) . ' websites uden problemer er udeladt.' : '') . '</p>'
             . '<p><strong>' . $totals['broken'] . '</strong> døde, <strong>' . $totals['redirects'] . '</strong> redirects, <strong>'
             . $totals['warnings'] . '</strong> advarsler, <strong>' . $totals['new'] . '</strong> nye og <strong>'
             . $totals['resolved'] . '</strong> løste problemer.</p>'
