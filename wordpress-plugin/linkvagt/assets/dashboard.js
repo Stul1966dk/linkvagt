@@ -1134,15 +1134,19 @@ document.addEventListener('click', async (event) => {
     }
     if (action.dataset.action === 'recheck') {
       const finding = state.findings.find((item) => item.id === Number(action.dataset.finding));
-      const source = finding.sources[0]?.source_url;
+      // Alle kildesider hentes igen, så sider, hvor linket er fjernet,
+      // forsvinder fra fundet, når kontrollen er færdig.
+      const sourceUrls = finding.sources.map((item) => item.source_url).filter((url) => url && url !== finding.destination_url);
+      const source = sourceUrls[0];
       await api(`/api/sites/${finding.site_id}/scan`, {
         method: 'POST',
-        body: JSON.stringify({ mode: source ? 'page' : 'link', target_url: source || finding.destination_url })
+        body: JSON.stringify({ mode: source ? 'page' : 'link', target_url: source || finding.destination_url, target_urls: sourceUrls.slice(1) })
       });
       await loadBase();
       if (state.view === 'site') showWorkspaceTab('scans');
       else showView('scans');
-      toast(source ? 'Kildesiden er sat i kø til ny kontrol' : 'Linket er sat i kø til ny kontrol');
+      const pageCount = Math.min(sourceUrls.length, 25);
+      toast(source ? (pageCount > 1 ? `${pageCount} kildesider er sat i kø til ny kontrol` : 'Kildesiden er sat i kø til ny kontrol') : 'Linket er sat i kø til ny kontrol');
     }
     if (action.dataset.action === 'mark-ok') {
       const finding = state.findings.find((item) => item.id === Number(action.dataset.finding));
@@ -1324,7 +1328,10 @@ $('#preview-repair').addEventListener('click', async () => {
     const anchorSummary = preview.anchor_text_changed
       ? `${preview.anchor_replacement_count} ankertekst${preview.anchor_replacement_count === 1 ? '' : 'er'} ændres.`
       : 'Ankerteksten beholdes.';
-    $('#repair-preview').innerHTML = `<strong>${escapeHtml(preview.post_title)}</strong><span>${summary || `${urlSummary} ${anchorSummary}`}</span><small>Resten af indholdet skal være identisk efter lagring.</small>`;
+    const sharedNote = preview.shared_block
+      ? '<small>Linket ligger i et synkroniseret mønster. Rettelsen slår igennem alle steder, hvor mønstret bruges.</small>'
+      : '';
+    $('#repair-preview').innerHTML = `<strong>${escapeHtml(preview.post_title)}</strong><span>${summary || `${urlSummary} ${anchorSummary}`}</span>${sharedNote}<small>Resten af indholdet skal være identisk efter lagring.</small>`;
     $('#repair-preview').hidden = false;
     $('#apply-repair').disabled = false;
   } catch (error) { resetRepairPreview(); toast(error.message, 'error'); }

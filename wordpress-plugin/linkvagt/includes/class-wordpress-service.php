@@ -231,8 +231,38 @@ final class WordPress_Service
             'replacement_count' => $prepared['replacement']['count'], 'old_anchor_text' => $prepared['source']['link_text'],
             'new_anchor_text' => $prepared['new_anchor_text'], 'anchor_text_changed' => $prepared['anchor_changed'],
             'anchor_replacement_count' => $prepared['replacement']['anchor_count'], 'url_changed' => $prepared['url_changed'],
-            'unlink' => $prepared['unlink'], 'before_hash' => hash('sha256', $prepared['original']),
+            'unlink' => $prepared['unlink'], 'shared_block' => $prepared['shared_block'],
+            'before_hash' => hash('sha256', $prepared['original']),
         ];
+    }
+
+    /**
+     * Leder i de synkroniserede mønstre (<!-- wp:block {"ref":N} /-->), som
+     * indholdet henviser til – også mønstre inde i mønstre, to niveauer ned.
+     */
+    private function find_in_shared_blocks(WordPress_Client $client, string $html, string $old_url, ?string $new_url, ?string $new_text, string $base, int $depth = 0, array &$seen = []): ?array
+    {
+        if ($depth > 2 || !preg_match_all('~<!--\s*wp:block\s+(\{.*?\})\s*/?-->~s', $html, $matches)) {
+            return null;
+        }
+        foreach ($matches[1] as $json) {
+            $ref = (int) (json_decode($json, true)['ref'] ?? 0);
+            if ($ref <= 0 || isset($seen[$ref])) {
+                continue;
+            }
+            $seen[$ref] = true;
+            $block = $client->get_post('blocks', $ref);
+            $original = $this->raw_content($block);
+            $replacement = $this->replace_anchors($original, $old_url, $new_url, $new_text, $base);
+            if ($replacement['count']) {
+                return ['post' => [...$block, 'post_type' => 'blocks'], 'original' => $original, 'replacement' => $replacement];
+            }
+            $nested = $this->find_in_shared_blocks($client, $original, $old_url, $new_url, $new_text, $base, $depth + 1, $seen);
+            if ($nested) {
+                return $nested;
+            }
+        }
+        return null;
     }
 
     private function prepare(WP_REST_Request $request): array
@@ -270,8 +300,18 @@ final class WordPress_Service
             }
         }
         $replacement = $this->replace_anchors($original, $finding['destination_url'], $unlink ? null : $new_url, $anchor_changed ? $new_anchor : null, $post['link']);
+        $shared_block = false;
         if (!$replacement['count']) {
-            throw new \RuntimeException('Linket findes ikke i WordPress-sidens almindelige indhold.');
+            // Linket kan ligge i et synkroniseret mønster (genbrugelig blok),
+            // som siden kun henviser til. Så rettes mønstret i stedet.
+            $block = $this->find_in_shared_blocks($client, $original, $finding['destination_url'], $unlink ? null : $new_url, $anchor_changed ? $new_anchor : null, $post['link']);
+            if (!$block) {
+                throw new \RuntimeException($this->missing_link_reason($original, (string) $finding['destination_url'], $old_anchor));
+            }
+            $post = [...$block['post'], 'link' => $post['link']];
+            $original = $block['original'];
+            $replacement = $block['replacement'];
+            $shared_block = true;
         }
         if ($replacement['buttons']) {
             throw new \RuntimeException('Linket er en knap. Fjern knappen i WordPress-editoren, så blokken ikke går i stykker.');
@@ -279,7 +319,7 @@ final class WordPress_Service
         if ($replacement['formatted']) {
             throw new \RuntimeException('Ankerteksten indeholder formatering og kan ikke ændres sikkert automatisk.');
         }
-        return compact('finding', 'source', 'client', 'post', 'original', 'new_url', 'new_anchor', 'anchor_changed', 'url_changed', 'unlink') + [
+        return compact('finding', 'source', 'client', 'post', 'original', 'new_url', 'new_anchor', 'anchor_changed', 'url_changed', 'unlink', 'shared_block') + [
             'new_anchor_text' => $anchor_changed ? $new_anchor : $old_anchor,
             'replacement' => $replacement,
             'title' => (string) ($post['title']['raw'] ?? $post['title']['rendered'] ?? $post['link']),
@@ -287,10 +327,53 @@ final class WordPress_Service
     }
 
     /**
+     * Retter links både i indholdets HTML og i HTML, som blokke gemmer i
+     * deres indstillinger (fx <!-- wp:su-media/seo-text {"content":"…"} /-->).
+     */
+    private function replace_anchors(string $html, string $old_url, ?string $new_url, ?string $new_text, string $base): array
+    {
+        $result = $this->replace_html_anchors($html, $old_url, $new_url, $new_text, $base);
+        $totals = $result;
+        $content = preg_replace_callback('~<!--\s+wp:([a-z][a-z0-9_/-]*)\s+(\{.*?\})\s+(/?)-->~s', function (array $m) use ($old_url, $new_url, $new_text, $base, &$totals): string {
+            $attributes = json_decode($m[2]);
+            if (!is_object($attributes)) {
+                return $m[0];
+            }
+            $found = 0;
+            $walk = function (&$value) use (&$walk, &$found, &$totals, $old_url, $new_url, $new_text, $base): void {
+                if (is_string($value)) {
+                    if (stripos($value, '<a') !== false) {
+                        $inner = $this->replace_html_anchors($value, $old_url, $new_url, $new_text, $base);
+                        if ($inner['count']) {
+                            $found += $inner['count'];
+                            foreach (['count', 'anchor_count', 'formatted', 'buttons'] as $key) {
+                                $totals[$key] += $inner[$key];
+                            }
+                            $value = $inner['content'];
+                        }
+                    }
+                } elseif (is_array($value) || is_object($value)) {
+                    foreach ($value as &$child) {
+                        $walk($child);
+                    }
+                    unset($child);
+                }
+            };
+            $walk($attributes);
+            if (!$found) {
+                return $m[0];
+            }
+            // Samme kodning som WordPress-editoren selv bruger.
+            return '<!-- wp:' . $m[1] . ' ' . serialize_block_attributes($attributes) . ' ' . $m[3] . '-->';
+        }, $result['content']);
+        return ['content' => (string) $content] + $totals;
+    }
+
+    /**
      * Retter alle <a>-elementer, der peger på $old_url. Med $new_url = null
      * fjernes linket, og det indre indhold bevares uændret.
      */
-    private function replace_anchors(string $html, string $old_url, ?string $new_url, ?string $new_text, string $base): array
+    private function replace_html_anchors(string $html, string $old_url, ?string $new_url, ?string $new_text, string $base): array
     {
         $count = $anchor_count = $formatted = $buttons = 0;
         $target = $this->normalize($old_url, $base);
@@ -352,11 +435,32 @@ final class WordPress_Service
 
     private function normalize(string $url, string $base): string
     {
-        if (!preg_match('~^https?://~i', $url)) {
+        $url = trim($url);
+        if (str_starts_with($url, '//')) {
+            $url = 'https:' . $url;
+        } elseif (!preg_match('~^https?://~i', $url)) {
             $origin = wp_parse_url($base, PHP_URL_SCHEME) . '://' . wp_parse_url($base, PHP_URL_HOST);
             $url = str_starts_with($url, '/') ? $origin . $url : rtrim(dirname($base), '/') . '/' . $url;
         }
-        return rtrim(strtolower((string) preg_replace('/#.*$/', '', $url)), '/');
+        // http/https og www. er samme adresse, når et plugin som Really
+        // Simple SSL først skifter til https ved visning.
+        $url = (string) preg_replace('~^https?://(www\.)?~i', '', $url);
+        return rtrim(strtolower(rawurldecode((string) preg_replace('/#.*$/', '', $url))), '/');
+    }
+
+    /** Forklarer, hvorfor et link på den viste side ikke findes i det redigerbare indhold. */
+    private function missing_link_reason(string $content, string $url, string $anchor): string
+    {
+        $path = rtrim((string) wp_parse_url($url, PHP_URL_PATH), '/');
+        if ($path !== '' && stripos($content, $path) !== false) {
+            return 'Linkadressen står i sidens indhold, men ikke som et almindeligt <a>-link (fx i en shortcode, en blokindstilling eller en page builder). Ret den i WordPress-editoren.';
+        }
+        $text = trim(html_entity_decode(wp_strip_all_tags($content), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $anchor = trim(html_entity_decode($anchor, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($anchor !== '' && mb_stripos((string) preg_replace('/\s+/u', ' ', $text), (string) preg_replace('/\s+/u', ' ', $anchor)) !== false) {
+            return 'Ankerteksten “' . $anchor . '” står i indholdet, men uden link. Linket bliver sandsynligvis indsat automatisk af et plugin til interne links (fx Link Whisper eller Internal Link Juicer) og skal rettes i plugin\'ets indstillinger.';
+        }
+        return 'Linket findes hverken i sidens indhold eller i dens synkroniserede mønstre. Det kommer sandsynligvis fra temaet, en widget, menuen eller forfatterboksen og skal rettes dér.';
     }
 
     private function error(string $message, int $status = 400): WP_Error
@@ -443,8 +547,10 @@ final class WordPress_Client
             throw new \RuntimeException($response->get_error_message());
         }
         $data = json_decode((string) wp_remote_retrieve_body($response), true);
-        if (wp_remote_retrieve_response_code($response) < 200 || wp_remote_retrieve_response_code($response) >= 300) {
-            throw new \RuntimeException(wp_strip_all_tags((string) ($data['message'] ?? 'WordPress afviste handlingen.')));
+        $status = (int) wp_remote_retrieve_response_code($response);
+        if ($status < 200 || $status >= 300) {
+            $message = is_array($data) && isset($data['message']) ? wp_strip_all_tags((string) $data['message']) : 'WordPress afviste handlingen (HTTP ' . $status . ').';
+            throw new \RuntimeException($message, $status);
         }
         return is_array($data) ? $data : [];
     }
@@ -455,13 +561,37 @@ final class WordPress_Client
         if ($slug === '') {
             throw new \RuntimeException('Forsiden kan endnu ikke rettes automatisk.');
         }
-        foreach (['pages', 'posts'] as $type) {
-            $items = $this->request($type . '?context=edit&slug=' . rawurlencode($slug) . '&per_page=20&_fields=id,link,content,title,status');
+        $denied = [];
+        foreach (['posts' => 'indlæg', 'pages' => 'sider'] as $type => $label) {
+            // En bruger med fx forfatterrollen må redigere indlæg, men ikke
+            // sider. Så springes den indholdstype over i stedet for at fejle.
+            try {
+                $items = $this->request($type . '?context=edit&slug=' . rawurlencode($slug) . '&per_page=20&_fields=id,link,content,title,status');
+            } catch (\RuntimeException $error) {
+                if (!in_array($error->getCode(), [401, 403], true)) {
+                    throw new \RuntimeException('WordPress-opslaget i ' . $label . ' fejlede: ' . $error->getMessage(), (int) $error->getCode());
+                }
+                $denied[] = $label . ' (' . $error->getMessage() . ')';
+                continue;
+            }
             foreach ($items as $item) {
                 if ($this->canonical((string) $item['link']) === $this->canonical($source_url)) {
                     return [...$item, 'post_type' => $type];
                 }
             }
+        }
+        if ($denied) {
+            // Afvises både indlæg og sider, er forespørgslen typisk slet ikke
+            // logget ind: applikationskodeord er slået fra, eller serveren
+            // fjerner Authorization-headeren.
+            try {
+                $this->request('users/me?_fields=id');
+            } catch (\RuntimeException $auth_error) {
+                if (in_array($auth_error->getCode(), [401, 403], true)) {
+                    throw new \RuntimeException('WordPress på sitet genkender ikke login fra LinkVagt (' . $auth_error->getMessage() . '). Typiske årsager: applikationskodeord er slået fra af et sikkerhedsplugin (fx Wordfence eller Solid Security), kodeordet er tilbagekaldt, eller serveren fjerner Authorization-headeren. Opret et nyt applikationskodeord og test forbindelsen igen.', 401);
+                }
+            }
+            throw new \RuntimeException('Kildesiden blev ikke fundet. WordPress afviste opslag i ' . implode(' og ', $denied) . '. Tjek at brugeren i forbindelsen har rollen Redaktør eller Administrator.');
         }
         throw new \RuntimeException('Kildesiden blev ikke fundet som et almindeligt WordPress-indlæg eller en side.');
     }

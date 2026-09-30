@@ -247,9 +247,16 @@ final class Scanner
             return;
         }
         if ($mode === 'page') {
-            $page_id = $this->register_page($scan_id, $target);
-            if ($page_id) {
-                $this->enqueue($scan_id, 'crawl_pages', ['ids' => [$page_id]]);
+            // "Kontrollér igen" sender alle et funds kildesider med.
+            $page_ids = [];
+            foreach (array_unique([$target, ...(array) ($payload['target_urls'] ?? [])]) as $url) {
+                $page_id = $this->register_page($scan_id, (string) $url);
+                if ($page_id) {
+                    $page_ids[] = $page_id;
+                }
+            }
+            foreach (array_chunk($page_ids, self::PAGE_BATCH) as $ids) {
+                $this->enqueue($scan_id, 'crawl_pages', ['ids' => $ids]);
             }
             return;
         }
@@ -847,6 +854,9 @@ final class Scanner
             return;
         }
         $scan = $this->scan($scan_id);
+        if ($scan['mode'] !== 'site') {
+            $this->reconcile_site_scan($scan);
+        }
         $wpdb->update(Schema::table('sites'), [
             'last_scan_at' => current_time('mysql', true),
             'updated_at' => current_time('mysql', true),
@@ -854,6 +864,108 @@ final class Scanner
         do_action('linkvagt_scan_completed', $scan_id);
         do_action('linkvagt_scan_finished', $scan_id);
         $this->prune_superseded_details($scan_id);
+    }
+
+    /**
+     * Fører en kontrol af enkelte sider eller links tilbage til den seneste
+     * fulde scanning, så dens fund ikke bliver hængende: En kildeside, der er
+     * hentet igen uden linket, fjernes fra fundet, og et link, der nu virker,
+     * lukkes. Fund uden kildesider tilbage markeres som løst.
+     */
+    private function reconcile_site_scan(array $scan): void
+    {
+        global $wpdb;
+        $scan_id = (int) $scan['id'];
+        $site_scan_id = (int) $wpdb->get_var($wpdb->prepare(
+            'SELECT id FROM ' . Schema::table('scans') . "
+             WHERE site_id=%d AND mode='site' AND status='completed' AND details_retained=1 AND id<%d
+             ORDER BY id DESC LIMIT 1",
+            (int) $scan['site_id'],
+            $scan_id
+        ));
+        if (!$site_scan_id) {
+            return;
+        }
+
+        // Hvilke links står på hver af de sider, der faktisk blev hentet?
+        $crawled = [];
+        foreach ($wpdb->get_col($wpdb->prepare(
+            'SELECT url_hash FROM ' . Schema::table('scan_pages') . " WHERE scan_id=%d AND status='completed'",
+            $scan_id
+        )) ?: [] as $page_hash) {
+            $crawled[(string) $page_hash] = [];
+        }
+        foreach ($wpdb->get_results($wpdb->prepare(
+            'SELECT url_hash,sources FROM ' . Schema::table('scan_links') . ' WHERE scan_id=%d',
+            $scan_id
+        ), ARRAY_A) ?: [] as $link) {
+            foreach (json_decode((string) $link['sources'], true) ?: [] as $source) {
+                $page_hash = hash('sha256', (string) ($source['source_url'] ?? ''));
+                if (isset($crawled[$page_hash])) {
+                    $crawled[$page_hash][(string) $link['url_hash']] = true;
+                }
+            }
+        }
+        $findings = Schema::table('findings');
+        $now_ok = [];
+        foreach ($wpdb->get_col($wpdb->prepare(
+            "SELECT destination_url FROM {$findings} WHERE scan_id=%d AND category='ok'",
+            $scan_id
+        )) ?: [] as $url) {
+            $now_ok[hash('sha256', (string) $url)] = true;
+        }
+
+        $sources_table = Schema::table('finding_sources');
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id,destination_url FROM {$findings}
+             WHERE scan_id=%d AND resolved_at IS NULL AND category<>'ok'",
+            $site_scan_id
+        ), ARRAY_A) ?: [];
+        $now = current_time('mysql', true);
+        $changed = false;
+        $refresh = [];
+        foreach ($rows as $row) {
+            $finding_id = (int) $row['id'];
+            $destination_hash = hash('sha256', (string) $row['destination_url']);
+            if (isset($now_ok[$destination_hash])) {
+                $wpdb->update($findings, ['resolved_at' => $now], ['id' => $finding_id]);
+                $changed = true;
+                continue;
+            }
+            if (!$crawled) {
+                continue;
+            }
+            $removed = 0;
+            foreach ($wpdb->get_col($wpdb->prepare(
+                "SELECT source_hash FROM {$sources_table} WHERE finding_id=%d",
+                $finding_id
+            )) ?: [] as $source_hash) {
+                if (isset($crawled[$source_hash]) && !isset($crawled[$source_hash][$destination_hash])) {
+                    $wpdb->delete($sources_table, ['finding_id' => $finding_id, 'source_hash' => $source_hash]);
+                    $removed++;
+                }
+            }
+            if (!$removed) {
+                continue;
+            }
+            $changed = true;
+            $remaining = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$sources_table} WHERE finding_id=%d",
+                $finding_id
+            ));
+            if ($remaining > 0) {
+                // De resterende kildesider kan alle være ignoreret.
+                $refresh[] = $finding_id;
+            } else {
+                $wpdb->update($findings, ['resolved_at' => $now], ['id' => $finding_id]);
+            }
+        }
+        if ($refresh) {
+            Link_Rules::refresh_findings($refresh);
+        }
+        if ($changed) {
+            Link_Rules::recount_scan($site_scan_id);
+        }
     }
 
     private function mark_scan_running(int $scan_id): void

@@ -403,6 +403,17 @@ final class Rest
         if ($mode !== 'site' && !wp_http_validate_url($target)) {
             return new WP_Error('linkvagt_invalid_url', 'En gyldig HTTP- eller HTTPS-adresse er påkrævet.', ['status' => 400]);
         }
+        $extra_targets = [];
+        if ($mode === 'page') {
+            foreach ((array) $request->get_param('target_urls') as $url) {
+                $url = trim((string) $url);
+                if ($url !== $target && wp_http_validate_url($url)) {
+                    $extra_targets[] = $url;
+                }
+            }
+            // En genkontrol holdes lille, så sitet ikke belastes unødigt.
+            $extra_targets = array_slice(array_values(array_unique($extra_targets)), 0, 24);
+        }
         $now = current_time('mysql', true);
         $wpdb->insert($scans, [
             'site_id' => $site_id,
@@ -419,7 +430,7 @@ final class Rest
             'scan_id' => $scan_id,
             'job_type' => 'discover',
             'status' => 'queued',
-            'payload' => wp_json_encode(['target_url' => $target]),
+            'payload' => wp_json_encode(['target_url' => $target, 'target_urls' => $extra_targets]),
             'available_at' => $now,
             'created_at' => $now,
             'updated_at' => $now,
